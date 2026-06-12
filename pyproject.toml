@@ -7,7 +7,7 @@ name = "celerisai"
 version = "0.1.0"
 description = "CelerisAi: Python-Taichi nearshore wave modeling framework"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Willington Renteria" }]
 dependencies = [
