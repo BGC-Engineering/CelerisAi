@@ -224,6 +224,10 @@ class Solver:
         self.DissipationFlux = self.domain.states()
         self.ContSource = self.domain.states_one()
         self.Breaking = self.domain.states()
+        # Continuity source d(bed)/dt from a prescribed moving-body landslide
+        # (see celeris/landslide.py); zero unless a slide is attached.
+        self.LandslideDhdt = self.domain.states_one()
+        self.landslide = None
 
         self.R_x  = self.domain.reflect_x()
         self.R_y  = self.domain.reflect_y()
@@ -1849,7 +1853,7 @@ class Solver:
                     if B_here > 0.0 :
                         overflow_dry = -self.infiltrationRate #hydraulic conductivity of coarse, unsaturated sand
 
-                    source_term = ti.Vector([overflow_dry, -self.g * h_here * detadx - in_state_here.y * friction_+press_x, 0.0, hc_by_dx_dx + c_dissipation],self.precision)
+                    source_term = ti.Vector([self.LandslideDhdt[i,j].x + overflow_dry, -self.g * h_here * detadx - in_state_here.y * friction_+press_x, 0.0, hc_by_dx_dx + c_dissipation],self.precision)
 
                     d_by_dt = (xflux_west - xflux_here) * self.one_over_dx + source_term
 
@@ -2035,7 +2039,7 @@ class Solver:
                     if B_here > 0.0 :
                         overflow_dry = -self.infiltrationRate #hydraulic conductivity of coarse, unsaturated sand
 
-                    source_term = ti.Vector([overflow_dry, -self.g * h_here * detadx - in_state_here.y * friction_+press_x, -self.g * h_here * detady - in_state_here.z * friction_+press_y, hc_by_dx_dx + hc_by_dy_dy + 2.0 * hc_by_dx_dy + c_dissipation],self.precision)
+                    source_term = ti.Vector([self.LandslideDhdt[i,j].x + overflow_dry, -self.g * h_here * detadx - in_state_here.y * friction_+press_x, -self.g * h_here * detady - in_state_here.z * friction_+press_y, hc_by_dx_dx + hc_by_dy_dy + 2.0 * hc_by_dx_dy + c_dissipation],self.precision)
 
                     d_by_dt = (
                         (xflux_west - xflux_here) * self.one_over_dx +
@@ -2384,7 +2388,7 @@ class Solver:
                     sx = -self.g * h_here * detadx - in_state_here[1] * friction_ + breaking_x + (Psi1x + Psi2x) + press_x
 
 
-                    source_term = ti.Vector([overflow_dry, sx, 0.0, hc_by_dx_dx + c_dissipation],self.precision)
+                    source_term = ti.Vector([self.LandslideDhdt[i,j].x + overflow_dry, sx, 0.0, hc_by_dx_dx + c_dissipation],self.precision)
                     d_by_dt = (xflux_west - xflux_here) * self.one_over_dx + source_term
 
                     # previous derivatives
@@ -2682,7 +2686,7 @@ class Solver:
                     sx = -self.g * h_here * detadx - in_state_here[1] * friction_ + breaking_x + (Psi1x + Psi2x) + press_x
                     sy = -self.g * h_here * detady - in_state_here[2] * friction_ + breaking_y + (Psi1y + Psi2y) + press_y
 
-                    source_term = ti.Vector([overflow_dry, sx, sy, hc_by_dx_dx + hc_by_dy_dy + 2.0 * hc_by_dx_dy + c_dissipation],self.precision)
+                    source_term = ti.Vector([self.LandslideDhdt[i,j].x + overflow_dry, sx, sy, hc_by_dx_dx + hc_by_dy_dy + 2.0 * hc_by_dx_dy + c_dissipation],self.precision)
                     d_by_dt = (
                         (xflux_west - xflux_here) * self.one_over_dx +
                         (yflux_south - yflux_here) * self.one_over_dy +

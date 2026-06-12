@@ -171,6 +171,8 @@ class Evolve:
         self.solver.InitStates()
         self.solver.tridiag_coeffs_X()
         self.solver.tridiag_coeffs_Y()
+        if self.solver.landslide is not None:
+            self.solver.landslide.snapshot_initial_bed()
         print('Model: ',self.solver.model)
         print('Numerical Scheme: ',self.solver.timeScheme,' dx:',self.solver.dx,' dy:',self.solver.dy)
         print('Breaking Model: ', self.solver.useBreakingModel,' Sediment Transport: ', self.solver.useSedTransModel)
@@ -191,6 +193,20 @@ class Evolve:
           - Copies or shifts old/predicted states for multi-stage time integrators
         """
         i = step
+
+        # Prescribed moving-body landslide: rewrite the bed and the dhdt
+        # continuity source, then refresh the bed-derived quantities (same
+        # sequence the WebGPU version runs for disturbanceType 5).
+        if self.solver.landslide is not None:
+            t_now = self.dt * i
+            if self.solver.landslide.is_active(t_now):
+                self.solver.landslide.update(t_now)
+                self.solver.fill_bottom_field()
+                if self.solver.model != 'SWE':
+                    self.solver.tridiag_coeffs_X()
+                    self.solver.tridiag_coeffs_Y()
+            else:
+                self.solver.landslide.deactivate()
 
         self.solver.Pass1(step=i)
 

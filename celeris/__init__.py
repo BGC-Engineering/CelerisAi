@@ -7,6 +7,7 @@ problems, and providing general utilities:
 - **domain.py**: Contains classes and functions defining the problem domain.
 - **runner.py**: Manages the execution flow, including initialization and orchestration.
 - **solver.py**: Implements the core solver logic for the defined domain and mathematical models.
+- **landslide.py**: Prescribed moving-body landslide source (dhdt continuity forcing).
 - **utils.py**: A collection of helper utilities used across the package.
 
 Example:

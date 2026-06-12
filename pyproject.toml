@@ -21,3 +21,20 @@ dependencies = [
 [tool.setuptools]
 packages = ["celeris"]
 
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.17",
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+disallow_untyped_decorators = false
+
+# Upstream modules predate type checking; only new modules are checked.
+[[tool.mypy.overrides]]
+module = ["celeris.domain", "celeris.runner", "celeris.solver", "celeris.utils"]
+follow_imports = "skip"
+ignore_errors = true
+
