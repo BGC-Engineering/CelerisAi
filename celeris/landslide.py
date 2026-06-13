@@ -53,6 +53,12 @@ class LandslideParams:
         wet_dhdt_only: If True, suppress the continuity source in dry cells
             so the subaerial part of the slide cannot create water on land
             (the failure mode noted in the WebGPU shader comments).
+        emerge_min_depth_m: Suppress the continuity source when the local
+            water column is thinner than this (m). Without it, a mound
+            thicker than the water it crosses pumps eta upward at bed-rise
+            rate -- the cell stays marginally wet and a phantom water film
+            rides the emerging slide, leaving spurious mass behind. Use a
+            few metres at field scale; 0 preserves lab-scale behaviour.
     """
 
     thickness_m: float
@@ -67,6 +73,7 @@ class LandslideParams:
     expo: float = 2.0
     final_azimuth_rad: float | None = None
     wet_dhdt_only: bool = True
+    emerge_min_depth_m: float = 0.0
 
     def __post_init__(self) -> None:
         """Default the time shift so the slide starts from rest."""
@@ -138,6 +145,7 @@ class MovingBodySlide:
         self._tshift = float(params.time_shift_s)
         self._expo = float(params.expo)
         self._wet_only = 1 if params.wet_dhdt_only else 0
+        self._min_depth = max(float(solver.delta), params.emerge_min_depth_m)
         self._startup_guard_s = 5.0 * float(solver.dt)
         self._dx = float(solver.dx)
         self._dy = float(solver.dy)
@@ -177,8 +185,20 @@ class MovingBodySlide:
                 dhdt = 0.0
             if self._wet_only == 1:
                 depth = self.solver.State[i, j][0] - b_old
-                if depth <= self._delta:
+                if depth <= self._min_depth:
                     dhdt = 0.0
+                    # Keep dry cells dry under the moving bed (the solver's
+                    # eta:=bed sanitation runs only after the flux passes, so
+                    # a bed drop would otherwise read as a column of water).
+                    if ti.abs(b_new - b_old) > 1e-6:
+                        for f in ti.static(
+                            [self.solver.State, self.solver.stateUVstar,
+                             self.solver.NewState,
+                             self.solver.current_stateUVstar]
+                        ):
+                            f[i, j][0] = b_new
+                            f[i, j][1] = 0.0
+                            f[i, j][2] = 0.0
             self.solver.Bottom[2, i, j] = b_new
             self.solver.LandslideDhdt[i, j].x = dhdt
 
