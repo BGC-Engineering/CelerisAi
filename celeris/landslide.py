@@ -59,6 +59,12 @@ class LandslideParams:
             rate -- the cell stays marginally wet and a phantom water film
             rides the emerging slide, leaving spurious mass behind. Use a
             few metres at field scale; 0 preserves lab-scale behaviour.
+        carve_scar: If True, also excavate the slide's rest-position footprint
+            (the source scar) so the moving body conserves volume -- material
+            is removed from the scar and deposited downslope, rather than
+            only deposited. This restores the source-side drawdown (the wave
+            trough) that a deposit-only mound cannot produce. Default False
+            preserves the lab-scale deposit-only behaviour.
     """
 
     thickness_m: float
@@ -74,6 +80,7 @@ class LandslideParams:
     final_azimuth_rad: float | None = None
     wet_dhdt_only: bool = True
     emerge_min_depth_m: float = 0.0
+    carve_scar: bool = False
 
     def __post_init__(self) -> None:
         """Default the time shift so the slide starts from rest."""
@@ -145,6 +152,7 @@ class MovingBodySlide:
         self._tshift = float(params.time_shift_s)
         self._expo = float(params.expo)
         self._wet_only = 1 if params.wet_dhdt_only else 0
+        self._carve = 1 if params.carve_scar else 0
         self._min_depth = max(float(solver.delta), params.emerge_min_depth_m)
         self._startup_guard_s = 5.0 * float(solver.dt)
         self._dx = float(solver.dx)
@@ -178,8 +186,24 @@ class MovingBodySlide:
             mound = 0.0
             if arg < 30.0:
                 mound = self._thickness * ti.exp(-arg)
+            # Volume-conserving carve: excavate the scar at the rest position
+            # (mound shape fixed at displacement 0) so the slide moves mass
+            # from source to deposit instead of only piling it on. Early on
+            # (disp ~ 0) deposit and scar coincide and cancel -> no net change.
+            scar = 0.0
+            if self._carve == 1:
+                xss = i * self._dx - self._x0
+                yss = j * self._dy - self._y0
+                along0 = xss * cos_a + yss * sin_a
+                across0 = -xss * sin_a + yss * cos_a
+                arg0 = (
+                    ti.pow(ti.abs(along0) / self._length, self._expo)
+                    + ti.pow(ti.abs(across0) / self._width, self._expo)
+                ) / 2.0
+                if arg0 < 30.0:
+                    scar = self._thickness * ti.exp(-arg0)
             b_old = self.solver.Bottom[2, i, j]
-            b_new = self.bottom_initial[i, j] + mound
+            b_new = self.bottom_initial[i, j] + mound - scar
             dhdt = (b_new - b_old) / self._dt
             if t < self._startup_guard_s:
                 dhdt = 0.0
@@ -192,9 +216,12 @@ class MovingBodySlide:
                     # a bed drop would otherwise read as a column of water).
                     if ti.abs(b_new - b_old) > 1e-6:
                         for f in ti.static(
-                            [self.solver.State, self.solver.stateUVstar,
-                             self.solver.NewState,
-                             self.solver.current_stateUVstar]
+                            [
+                                self.solver.State,
+                                self.solver.stateUVstar,
+                                self.solver.NewState,
+                                self.solver.current_stateUVstar,
+                            ]
                         ):
                             f[i, j][0] = b_new
                             f[i, j][1] = 0.0
