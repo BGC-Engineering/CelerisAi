@@ -7,7 +7,7 @@ name = "celerisai"
 version = "0.1.0"
 description = "CelerisAi: Python-Taichi nearshore wave modeling framework"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Willington Renteria" }]
 dependencies = [
@@ -20,4 +20,27 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["celeris"]
+
+[dependency-groups]
+dev = [
+    "joblib>=1.5.3",
+    "loguru>=0.7.3",
+    "mypy>=2.1.0",
+    "openpyxl>=3.1.5",
+    "pandas>=2.3.3",
+    "pytest>=9.0.3",
+    "pyvista>=0.48.4",
+    "ruff>=0.15.17",
+    "tqdm>=4.68.2",
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+disallow_untyped_decorators = false
+
+# Upstream modules predate type checking; only new modules are checked.
+[[tool.mypy.overrides]]
+module = ["celeris.domain", "celeris.runner", "celeris.solver", "celeris.utils"]
+follow_imports = "skip"
+ignore_errors = true
 
