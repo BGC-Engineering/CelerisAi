@@ -7,17 +7,21 @@ name = "celerisai"
 version = "0.1.0"
 description = "CelerisAi: Python-Taichi nearshore wave modeling framework"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Willington Renteria" }]
+# Lower bounds only. The previous exact pins (numpy==1.24.3, scipy==1.9.0,
+# matplotlib==3.7.2) and the <3.12 cap forced a legacy environment; taichi 1.7.4
+# in fact ships cp312 wheels and runs on numpy 2, so the ceilings are dropped to
+# let CelerisAi install into a modern stack (Python 3.12, numpy 2).
 dependencies = [
     "contextily>=1.7.0",
-    "imageio==2.36.0",
-    "matplotlib==3.7.2",
-    "numpy==1.24.3",
+    "imageio>=2.36.0",
+    "matplotlib>=3.7.2",
+    "numpy>=1.24",
     "pyproj>=3.7.1",
-    "scipy==1.9.0",
-    "taichi==1.7.4",
+    "scipy>=1.9",
+    "taichi>=1.7.4",
 ]
 
 [tool.setuptools]
