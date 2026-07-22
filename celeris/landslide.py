@@ -65,6 +65,15 @@ class LandslideParams:
             only deposited. This restores the source-side drawdown (the wave
             trough) that a deposit-only mound cannot produce. Default False
             preserves the lab-scale deposit-only behaviour.
+        blend_start_frac: Displacement fraction at which the mound starts
+            morphing into the deposit surface (see
+            :meth:`MovingBodySlide.set_deposit`). Negative (default)
+            disables blending: the mound stays rigid, matching the WebGPU
+            behaviour.
+        blend_end_frac: Displacement fraction at which the morph completes
+            (the bed is then ``initial + deposit``). Keep below the tanh
+            asymptote actually reached at ``end_time_s`` (99.93 %) so the
+            final bed is exactly the deposit.
     """
 
     thickness_m: float
@@ -81,6 +90,8 @@ class LandslideParams:
     wet_dhdt_only: bool = True
     emerge_min_depth_m: float = 0.0
     carve_scar: bool = False
+    blend_start_frac: float = -1.0
+    blend_end_frac: float = 0.995
 
     def __post_init__(self) -> None:
         """Default the time shift so the slide starts from rest."""
@@ -138,6 +149,11 @@ class MovingBodySlide:
         self.solver = solver
         self.params = params
         self.bottom_initial = ti.field(solver.precision, shape=(solver.nx, solver.ny))
+        # Deposit blend target (zero thickness until set_deposit is called).
+        self.deposit = ti.field(solver.precision, shape=(solver.nx, solver.ny))
+        self._blend = 1 if params.blend_start_frac >= 0.0 else 0
+        self._blend_f0 = float(params.blend_start_frac)
+        self._blend_f1 = float(params.blend_end_frac)
         # Kernel-visible scalar copies (captured as compile-time constants).
         self._thickness = float(params.thickness_m)
         self._length = float(params.length_m)
@@ -160,6 +176,33 @@ class MovingBodySlide:
         self._dt = float(solver.dt)
         self._delta = float(solver.delta)
         self._cleared = False
+        self._deposit_set = False
+
+    def set_deposit(self, thickness: "object") -> None:
+        """Load the deposit-blend target surface.
+
+        Args:
+            thickness: ``(nx, ny)`` array of deposit thickness above the
+                initial bed (m). The blend morphs the moving mound into this
+                surface between ``blend_start_frac`` and ``blend_end_frac``
+                of the displacement; for exact volume conservation its
+                integral should equal the mound volume.
+
+        Raises:
+            ValueError: If blending is disabled or the shape mismatches.
+        """
+        if self._blend != 1:
+            raise ValueError("set_deposit requires blend_start_frac >= 0")
+        import numpy as np
+
+        arr = np.asarray(thickness, dtype=np.float64)
+        if arr.shape != (self.solver.nx, self.solver.ny):
+            raise ValueError(
+                f"deposit shape {arr.shape} != grid "
+                f"({self.solver.nx}, {self.solver.ny})"
+            )
+        self.deposit.from_numpy(arr.astype(np.float32))
+        self._deposit_set = True
 
     @ti.kernel
     def snapshot_initial_bed(self):
@@ -202,8 +245,29 @@ class MovingBodySlide:
                 ) / 2.0
                 if arg0 < 30.0:
                     scar = self._thickness * ti.exp(-arg0)
+            # Deposit blend: morph the rigid mound into the deposit surface
+            # over [blend_f0, blend_f1] of the displacement (smoothstep), so
+            # the slide decelerates INTO a real deposit instead of parking
+            # its rigid shape. Both surfaces hold the same volume, so the
+            # linear blend conserves volume at every instant.
+            lam = 0.0
+            if ti.static(self._blend == 1):
+                xb = ti.min(
+                    ti.max(
+                        (frac - self._blend_f0)
+                        / (self._blend_f1 - self._blend_f0),
+                        0.0,
+                    ),
+                    1.0,
+                )
+                lam = xb * xb * (3.0 - 2.0 * xb)
             b_old = self.solver.Bottom[2, i, j]
-            b_new = self.bottom_initial[i, j] + mound - scar
+            b_new = (
+                self.bottom_initial[i, j]
+                + (1.0 - lam) * mound
+                + lam * self.deposit[i, j]
+                - scar
+            )
             dhdt = (b_new - b_old) / self._dt
             if t < self._startup_guard_s:
                 dhdt = 0.0
@@ -240,7 +304,13 @@ class MovingBodySlide:
 
         Args:
             t: Simulation time (s).
+
+        Raises:
+            RuntimeError: If blending is enabled but no deposit was loaded
+                (the mound would silently fade to nothing).
         """
+        if self._blend == 1 and not self._deposit_set:
+            raise RuntimeError("blend enabled but set_deposit was never called")
         self._apply(t)
 
     def deactivate(self) -> None:
