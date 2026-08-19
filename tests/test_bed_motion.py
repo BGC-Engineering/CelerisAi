@@ -139,6 +139,25 @@ def test_prescribed_matches_analytic(tmp_path: Path) -> None:
     assert np.abs(eta_n - eta_a).max() < 0.15 * peak
 
 
+def test_run_past_file_end(tmp_path: Path) -> None:
+    """A simulation longer than the file stays finite and holds the deposit."""
+    params = _slide_params()
+    motion = _analytic_motion(params, frame_dt=1.0)
+    solver, run = _build_solver(tmp_path)
+    slide = PrescribedBedSlide(solver, motion)
+    solver.landslide = slide
+    run.Evolve_0()
+    bed0 = solver.Bottom.to_numpy()[2, :, :].copy()
+    dt = float(solver.dt)
+    n_steps = int(2.0 * motion.time[-1] / dt)
+    for i in range(n_steps):
+        run.Evolve_Steps(i)
+    assert np.isfinite(solver.State.to_numpy()).all()
+    bed_end = solver.Bottom.to_numpy()[2, :, :]
+    np.testing.assert_allclose(bed_end - bed0, slide.frames[-1], atol=1e-5)
+    assert np.abs(solver.LandslideDhdt.to_numpy()[:, :, 0]).max() == 0.0
+
+
 def test_bed_tracks_frames_and_zero_outside_coverage(tmp_path: Path) -> None:
     """The bed change equals the frame dz; cells beyond coverage stay put."""
     params = _slide_params()
