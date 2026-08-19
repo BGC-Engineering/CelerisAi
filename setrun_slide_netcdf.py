@@ -20,6 +20,7 @@ Usage (cases are independent -- pin each to a GPU and run in parallel)::
     CUDA_VISIBLE_DEVICES=1 python setrun_slide_netcdf.py run SWE analytic
     CUDA_VISIBLE_DEVICES=1 python setrun_slide_netcdf.py run SWE netcdf
     python setrun_slide_netcdf.py plot
+    python setrun_slide_netcdf.py movie Bouss netcdf   # MP4 animation
 
 Outputs land in ``examples/SlideBasinNC/``.
 """
@@ -74,6 +75,9 @@ FRAME_DT = 1.0  # NetCDF frame cadence (s) -- DAN3D-like coarseness
 SIM_TIME = 60.0
 GAUGES_X = (30.0, 100.0, 180.0)  # deep, mid-basin, near impact (m)
 SNAP_TIMES = (10.0, 20.0, 40.0)
+MOVIE_FRAME_DT = 0.25  # animation sampling cadence (s)
+MOVIE_FPS = 20
+MOVIE_ETA_LIM = 2.5  # color scale (m)
 
 
 def build_basin() -> None:
@@ -119,8 +123,8 @@ def npz_path(model: str, source: str) -> str:
     return os.path.join(CASE_DIR, f"result_{model}_{source}.npz")
 
 
-def run_case(model: str, source: str) -> None:
-    """Run one case and save gauges, snapshots and the max-eta field."""
+def build_case(model: str, source: str) -> tuple[Solver, Evolve]:
+    """Assemble the solver for one (model, source) case."""
     ti.init(arch=ti.gpu, default_fp=ti.f32)  # falls back to CPU if no GPU
     topo = Topodata(filename="basin.xyz", path=CASE_DIR, datatype="xyz")
     bc = BoundaryConditions(celeris=False, North=0, South=0, East=0, West=0)
@@ -151,7 +155,12 @@ def run_case(model: str, source: str) -> None:
         )
     run = Evolve(solver=solver, maxsteps=1)
     run.Evolve_0()
+    return solver, run
 
+
+def run_case(model: str, source: str) -> None:
+    """Run one case and save gauges, snapshots and the max-eta field."""
+    solver, run = build_case(model, source)
     dt = float(solver.dt)
     n_steps = int(SIM_TIME / dt)
     gi = [int(x / solver.dx) for x in GAUGES_X]
@@ -183,6 +192,54 @@ def run_case(model: str, source: str) -> None:
         bed0=bed0,
     )
     print(f"{model}/{source}: peak gauge eta {np.abs(gauge_eta).max():.3f} m")
+
+
+def movie_case(model: str, source: str) -> None:
+    """Run one case and write an MP4: eta field plus the moving slide."""
+    import imageio
+
+    solver, run = build_case(model, source)
+    dt = float(solver.dt)
+    n_steps = int(SIM_TIME / dt)
+    frame_every = max(1, int(MOVIE_FRAME_DT / dt))
+    bed0 = solver.Bottom.to_numpy()[2, :, :]
+    wet0 = bed0 < 0.0
+    extent = (0.0, LX, 0.0, LY)
+    xg = np.arange(solver.nx) * float(solver.dx)
+    yg = np.arange(solver.ny) * float(solver.dy)
+    out = os.path.join(CASE_DIR, f"movie_{model}_{source}.mp4")
+    fig, ax = plt.subplots(figsize=(12.0, 4.8), dpi=100)
+    writer = imageio.get_writer(out, fps=MOVIE_FPS, codec="libx264", quality=7)
+    for i in range(n_steps):
+        run.Evolve_Steps(i)
+        if i % frame_every:
+            continue
+        state = solver.State.to_numpy()[:, :, 0]
+        eta = np.where(wet0, state, np.nan)
+        slide = solver.Bottom.to_numpy()[2, :, :] - bed0
+        ax.clear()
+        ax.imshow(
+            eta.T,
+            origin="lower",
+            extent=extent,
+            cmap="RdBu_r",
+            vmin=-MOVIE_ETA_LIM,
+            vmax=MOVIE_ETA_LIM,
+        )
+        if np.abs(slide).max() > 0.2:
+            ax.contour(
+                xg, yg, slide.T, levels=[0.2, 1.0, 2.0], colors="0.35", linewidths=0.8
+            )
+        ax.contour(xg, yg, bed0.T, levels=[0.0], colors="k", linewidths=0.6)
+        ax.set_title(f"{model} / {source} slide    t = {i * dt:5.1f} s")
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+        fig.canvas.draw()
+        frame = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
+        writer.append_data(frame)
+    writer.close()
+    plt.close(fig)
+    print(f"Movie: {out}")
 
 
 def spatial_figure(model: str) -> str:
@@ -287,6 +344,8 @@ if __name__ == "__main__":
         print(f"Wrote {CASE_DIR}/basin.xyz and slide.nc")
     elif mode == "run":
         run_case(sys.argv[2], sys.argv[3])
+    elif mode == "movie":
+        movie_case(sys.argv[2], sys.argv[3])
     elif mode == "plot":
         for m in MODELS:
             print("Figure:", spatial_figure(m))
