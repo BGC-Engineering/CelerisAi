@@ -8,3 +8,6 @@ differentiability/assimilation/plots/*.png
 __pycache__/
 *.pyc
 *.egg-info/
+
+# SlideBasinNC demo generated inputs/outputs
+examples/SlideBasinNC/
