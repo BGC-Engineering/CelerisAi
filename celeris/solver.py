@@ -118,7 +118,8 @@ class Solver:
                  dzdt_I_coef= 0.50,
                  dzdt_F_coef= 0.15,
                  subgrid_viscosity=False,
-                 algochanges=1
+                 algochanges=1,
+                 wetdry_scheme='legacy'
                  ):
         """
         Initializes the Solver with domain and boundary-condition data and sets parameters 
@@ -228,6 +229,15 @@ class Solver:
         # (see celeris/landslide.py); zero unless a slide is attached.
         self.LandslideDhdt = self.domain.states_one()
         self.landslide = None
+        # Wet/dry treatment. 'legacy' reproduces upstream CelerisAi bit for bit.
+        # 'conserving': a dry cell carries no face depth (no phantom water), a wet
+        # surface standing above a dry neighbour's bed drives a flux into it
+        # (gravity-driven wetting), fully dry cells keep eta = bed instead of
+        # eta = 0, and sub-delta water is kept rather than discarded (no leak).
+        if wetdry_scheme not in ('legacy', 'conserving'):
+            raise ValueError(f"wetdry_scheme must be 'legacy' or 'conserving', got {wetdry_scheme!r}")
+        self.wetdry_scheme = wetdry_scheme
+        self.wd_conserving = 1 if wetdry_scheme == 'conserving' else 0
 
         self.R_x  = self.domain.reflect_x()
         self.R_y  = self.domain.reflect_y()
@@ -773,7 +783,7 @@ class Solver:
                 # Check for negative depths
                 h_here = BCState.x - B_here  # To change
                 if (h_here <= self.delta):
-                    if (B_here <= 0.0):
+                    if (B_here <= 0.0) or self.wd_conserving == 1:
                         BCState = ti.Vector([ti.max(BCState.x,B_here), 0.0, 0.0, 0.0],self.precision)
                     else:
                         BCState = ti.Vector([B_here, 0.0, 0.0, 0.0],self.precision)
@@ -1113,7 +1123,7 @@ class Solver:
                     boundary_boolean = 1
 
                 # Remove islands
-                if dry_here==1 and boundary_boolean < 0:
+                if self.wd_conserving == 0 and dry_here==1 and boundary_boolean < 0:
                     if sum_dry==0:
                         if (B_here<=0.0):
                             BCState = ti.Vector([ti.max(BCState.x , B_here),0.0,0.0,0.0],self.precision)
@@ -1133,7 +1143,7 @@ class Solver:
                 # Check for negative depths
                 h_here = BCState.x - B_here  # To change
                 if (h_here <= self.delta):
-                    if (B_here <= 0.0):
+                    if (B_here <= 0.0) or self.wd_conserving == 1:
                         BCState = ti.Vector([ti.max(BCState.x,B_here),0.0,0.0,0.0],self.precision)
                     else:
                         BCState = ti.Vector([B_here,0.0,0.0,0.0],self.precision)
@@ -1327,6 +1337,14 @@ class Solver:
                 hcwy = Reconstruct(in_W[3], in_here[3], in_E[3],TWO_THETAc)
                 hc = ti.Vector([0.0, hcwy.y, 0.0, hcwy.x],self.precision)
 
+                if self.wd_conserving == 1 and h_here <= self.delta:
+                    # A dry cell has no water at its faces; the flat eta = bed
+                    # reconstruction would otherwise put phantom depth on the face
+                    # that looks down onto a lower neighbour.
+                    h = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hu = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hv = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hc = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                 output_u, output_v, output_c = CalcUV(h, hu, hv, hc, self.epsilon, dB_max)
 
                 #Froude number limiter
@@ -1469,6 +1487,14 @@ class Solver:
                 hczx = Reconstruct(in_S[3], in_here[3], in_N[3],TWO_THETAc)
                 hc = ti.Vector([hczx.y, hcwy.y, hczx.x, hcwy.x],self.precision)
 
+                if self.wd_conserving == 1 and h_here <= self.delta:
+                    # A dry cell has no water at its faces; the flat eta = bed
+                    # reconstruction would otherwise put phantom depth on the face
+                    # that looks down onto a lower neighbour.
+                    h = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hu = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hv = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                    hc = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                 output_u, output_v, output_c = CalcUV(h, hu, hv, hc, self.epsilon, dB_max)
 
                 #Froude number limiter
@@ -1627,8 +1653,25 @@ class Solver:
                     P_diff_x = (hW_east * uW_east - h_here.y * u_here.y)
 
                     if minH <= self.delta :
-                        mass_diff_x = 0.0
                         phix = 1.0
+                        if self.wd_conserving == 0:
+                            mass_diff_x = 0.0
+                    wall_x = 0
+                    if self.wd_conserving == 1:
+                        eta_c = self.State[i,j][0]
+                        eta_e = self.State[rightIdx,j][0]
+                        B_e = self.Bottom[2,rightIdx,j]
+                        hc_c = eta_c - B_here
+                        hc_e = eta_e - B_e
+                        if hc_c <= self.delta or hc_e <= self.delta:
+                            mass_diff_x = 0.0
+                            wall_x = 1
+                            if hc_c > self.delta and eta_c > B_e:
+                                mass_diff_x = -(eta_c - B_e)
+                                wall_x = 0
+                            elif hc_e > self.delta and eta_e > B_here:
+                                mass_diff_x = eta_e - B_here
+                                wall_x = 0
 
                     xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
 
@@ -1636,6 +1679,8 @@ class Solver:
                     xflux[1] = NumericalFlux(aplus, aminus, hW_east * uW_east * uW_east, h_here.y * u_here.y * u_here.y, P_diff_x)
                     xflux[3] = NumericalFlux(aplus, aminus, hW_east * uW_east * cW_east, h_here.y * u_here.y * c_here.y, phix*(hW_east * cW_east - h_here.y * c_here.y))
 
+                    if wall_x == 1:
+                        xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                     # Write Fluxes fluid
                     self.XFlux[i,j] = xflux
 
@@ -1717,10 +1762,48 @@ class Solver:
                 Q_diff_y = (hS_north * vS_north - h_here.x * v_here.x)
 
                 if minH <= self.delta :
-                    mass_diff_x = 0.0
-                    mass_diff_y = 0.0
                     phix = 1.0
                     phiy = 1.0
+                    if self.wd_conserving == 0:
+                        mass_diff_x = 0.0
+                        mass_diff_y = 0.0
+                wall_x = 0
+                wall_y = 0
+                if self.wd_conserving == 1:
+                    # Wet/dry face: the dry side holds no water (Pass1), so the
+                    # diffusive term carries the head of the wet surface above the
+                    # dry cell's bed (gravity-driven wetting) and is zero when the
+                    # dry bed stands above the water (a wall). Both-wet faces keep
+                    # the full central-upwind term.
+                    eta_c = self.State[i,j][0]
+                    eta_e = self.State[rightIdx,j][0]
+                    eta_n = self.State[i,upIdx][0]
+                    B_e = self.Bottom[2,rightIdx,j]
+                    B_n = self.Bottom[2,i,upIdx]
+                    hc_c = eta_c - B_here
+                    hc_e = eta_e - B_e
+                    hc_n = eta_n - B_n
+                    # A wet/dry face without wetting is a wall: no mass and no
+                    # momentum crosses it (the momentum diffusion term would
+                    # otherwise drain momentum into the dry cell, a wall drag).
+                    if hc_c <= self.delta or hc_e <= self.delta:
+                        mass_diff_x = 0.0
+                        wall_x = 1
+                        if hc_c > self.delta and eta_c > B_e:
+                            mass_diff_x = -(eta_c - B_e)
+                            wall_x = 0
+                        elif hc_e > self.delta and eta_e > B_here:
+                            mass_diff_x = eta_e - B_here
+                            wall_x = 0
+                    if hc_c <= self.delta or hc_n <= self.delta:
+                        mass_diff_y = 0.0
+                        wall_y = 1
+                        if hc_c > self.delta and eta_c > B_n:
+                            mass_diff_y = -(eta_c - B_n)
+                            wall_y = 0
+                        elif hc_n > self.delta and eta_n > B_here:
+                            mass_diff_y = eta_n - B_here
+                            wall_y = 0
 
                 xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                 yflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
@@ -1735,6 +1818,10 @@ class Solver:
                 yflux[2] = NumericalFlux(bplus, bminus, hS_north * vS_north * vS_north, h_here.x * v_here.x * v_here.x, Q_diff_y)
                 yflux[3] = NumericalFlux(bplus, bminus, hS_north * cS_north * vS_north, h_here.x * c_here.x * v_here.x, phiy*(hS_north * cS_north - h_here.x * c_here.x))
 
+                if wall_x == 1:
+                    xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                if wall_y == 1:
+                    yflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                 # Write Fluxes fluid
                 self.XFlux[i,j] = xflux
                 self.YFlux[i,j] = yflux
@@ -1819,6 +1906,10 @@ class Solver:
                     #friction_here =  ti.max(self.friction, self.BottomFriction[i,j][0])
                     friction_here =  self.BottomFriction[i,j].x
                     friction_ = FrictionCalc(in_state_here[1], 0.0, h_here, self.base_depth, self.delta, self.isManning, self.g, friction_here,self.differentiability)
+                    if self.wd_conserving == 1:
+                        # Explicit Manning friction over-relaxes in thin fast films
+                        # (f ~ h^-7/3); cap the decay rate at half the step's limit.
+                        friction_ = ti.min(friction_, 0.5 / self.dt)
                     
 
                     # Pressure stencil calculations
@@ -1891,10 +1982,15 @@ class Solver:
                     self.predictedF_G_star[i,j] = F_G_vec
                     self.current_stateUVstar[i , j] = newState
                     if dry:
-                        self.NewState[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                        eta_dry = 0.0
+                        if self.wd_conserving == 1:
+                            # eta = 0 is the datum: a column of water wherever the
+                            # bed lies below it. Keep what the cell holds (>= bed).
+                            eta_dry = ti.max(in_state_here[0], B_here)
+                        self.NewState[i,j] = ti.Vector([eta_dry, 0.0, 0.0, 0.0],self.precision)
                         self.dU_by_dt[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                         self.predictedF_G_star[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
-                        self.current_stateUVstar[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                        self.current_stateUVstar[i,j] = ti.Vector([eta_dry, 0.0, 0.0, 0.0],self.precision)
         else:
             for i,j in self.NewState:
                 if i >= (self.nx - 2) or j >= (self.ny - 2) or i <= 1 or j <= 1:
@@ -1984,6 +2080,10 @@ class Solver:
 
                     friction_here =  ti.max(self.friction, self.BottomFriction[i,j][0])
                     friction_ = FrictionCalc(in_state_here[1], in_state_here[2], h_here, self.base_depth, self.delta, self.isManning, self.g, friction_here,self.differentiability)
+                    if self.wd_conserving == 1:
+                        # Explicit Manning friction over-relaxes in thin fast films
+                        # (f ~ h^-7/3); cap the decay rate at half the step's limit.
+                        friction_ = ti.min(friction_, 0.5 / self.dt)
 
                     # Pressure stencil calculations
                     P_left = self.ShipPressure[i-1 , j].x
@@ -2082,10 +2182,15 @@ class Solver:
                     self.predictedF_G_star[i,j] = F_G_vec
                     self.current_stateUVstar[i , j] = newState
                     if dry:
-                        self.NewState[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                        eta_dry = 0.0
+                        if self.wd_conserving == 1:
+                            # eta = 0 is the datum: a column of water wherever the
+                            # bed lies below it. Keep what the cell holds (>= bed).
+                            eta_dry = ti.max(in_state_here[0], B_here)
+                        self.NewState[i,j] = ti.Vector([eta_dry, 0.0, 0.0, 0.0],self.precision)
                         self.dU_by_dt[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
                         self.predictedF_G_star[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
-                        self.current_stateUVstar[i,j] = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
+                        self.current_stateUVstar[i,j] = ti.Vector([eta_dry, 0.0, 0.0, 0.0],self.precision)
 
 
     @ti.kernel
@@ -2327,6 +2432,10 @@ class Solver:
                     #friction_here =  ti.max(self.friction, self.BottomFriction[i,j][0])
                     friction_here =  self.BottomFriction[i,j].x
                     friction_ = FrictionCalc(in_state_here[1],0.0, h_here, self.base_depth, self.delta, self.isManning, self.g, friction_here,self.differentiability)
+                    if self.wd_conserving == 1:
+                        # Explicit Manning friction over-relaxes in thin fast films
+                        # (f ~ h^-7/3); cap the decay rate at half the step's limit.
+                        friction_ = ti.min(friction_, 0.5 / self.dt)
 
                     # Pressure stencil calculations
                     P_left = self.ShipPressure[i-1,j].x
@@ -2607,6 +2716,10 @@ class Solver:
 
                     friction_here =  ti.max(self.friction, self.BottomFriction[i,j][0])
                     friction_ = FrictionCalc(in_state_here[1], in_state_here[2], h_here, self.base_depth, self.delta, self.isManning, self.g, friction_here,self.differentiability)
+                    if self.wd_conserving == 1:
+                        # Explicit Manning friction over-relaxes in thin fast films
+                        # (f ~ h^-7/3); cap the decay rate at half the step's limit.
+                        friction_ = ti.min(friction_, 0.5 / self.dt)
 
                     # Pressure stencil calculations
                     P_left = self.ShipPressure[i-1,j].x

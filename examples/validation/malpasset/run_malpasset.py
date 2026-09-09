@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--sample-dt", type=float, default=1.0, help="readback interval (s)")
     ap.add_argument("--seed-wetting", type=float, default=0.0, help="seed depth (m) for the wetting kernel, 0 = off")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--wetdry", default="legacy", choices=["legacy", "conserving"], help="Solver wet/dry scheme")
     args = ap.parse_args()
     wd = args.workdir
 
@@ -49,7 +50,7 @@ def main():
     dom = Domain(topodata=topo, x1=0.0, x2=nx * dx, y1=0.0, y2=ny * dx, Nx=nx, Ny=ny,
                  isManning=1, friction=MANNING_N, Courant=args.courant, base_depth=hmax0)
     solver = Solver(domain=dom, boundary_conditions=bc, model="SWE", useBreakingModel=True,
-                    infiltrationRate=0.0, show_window=False)
+                    infiltrationRate=0.0, show_window=False, wetdry_scheme=args.wetdry)
     evolve = Evolve(solver=solver, maxsteps=1)
     evolve.Evolve_0()
     dt = float(solver.dt)
