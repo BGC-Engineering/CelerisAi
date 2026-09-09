@@ -172,6 +172,10 @@ class Solver:
         # Physical "state" values, eval at center of cell
         self.State = self.domain.states()                   # stores the state[eta, P, Q, hc] at t = n
         self.NewState = self.domain.states()                # stores the state[eta, P, Q, hc] at t = n + 1
+        # Read-only copies for kernels that update a field in place while reading
+        # its neighbours (BoundaryPass, Pass_Breaking): without them the parallel
+        # loop order decides the result and GPU runs are not reproducible.
+        self.StateScratch = self.domain.states()
         self.BottomFriction = self.domain.states_one()      # friction as a vector field
         self.stateUVstar =self.domain.states()              # the values of the current (n) bous-grouped state, or eta, U, V, and c
         self.current_stateUVstar =self.domain.states()      # next bous-grouped state
@@ -225,6 +229,7 @@ class Solver:
         self.DissipationFlux = self.domain.states()
         self.ContSource = self.domain.states_one()
         self.Breaking = self.domain.states()
+        self.BreakingScratch = self.domain.states()
         # Continuity source d(bed)/dt from a prescribed moving-body landslide
         # (see celeris/landslide.py); zero unless a slide is attached.
         self.LandslideDhdt = self.domain.states_one()
@@ -610,8 +615,17 @@ class Solver:
             Q_c = self.precision(self.Q_500)
         return stage_c, Q_c
 
+    def BoundaryPass(self, time, txState):
+        """Apply boundary conditions to ``txState`` in place.
+
+        Reads come from a snapshot so the result does not depend on the order
+        in which the parallel loop visits cells.
+        """
+        self.copy_states(txState, self.StateScratch)
+        self._boundary_pass(time, txState, self.StateScratch)
+
     @ti.kernel
-    def BoundaryPass(self,time:ti.f32, txState: ti.template()):
+    def _boundary_pass(self,time:ti.f32, txState: ti.template(), srcState: ti.template()):
         """
         Updates boundary cells with the appropriate boundary conditions:
           - Sponge layers (type=1) 
@@ -630,7 +644,7 @@ class Solver:
         #Check 1D
         if self.ny==1:
             for i,j in ti.ndrange((0,self.nx),(0,self.ny)):
-                BCState = txState[i,j]
+                BCState = srcState[i,j]
                 BCState_Sed = self.State_Sed[i,j].x
                 BCState_Sed = ti.max(BCState_Sed,0.0)
                 periodic_overlap = 2
@@ -639,49 +653,49 @@ class Solver:
                 if self.bcWest == 3:
                     if i <= periodic_overlap - 1:
                         east_idx = self.nx - 2 * periodic_overlap + i - 1
-                        BCState = txState[east_idx, j]
+                        BCState = srcState[east_idx, j]
                         BCState_Sed = self.State_Sed[east_idx, j].x
                         periodic_boundary_cell = 1
                     elif i == periodic_overlap:
                         east_idx = self.nx - 2 * periodic_overlap + i - 1
-                        BCState[1] = 0.5 * (BCState[1] + txState[east_idx, j][1])
+                        BCState[1] = 0.5 * (BCState[1] + srcState[east_idx, j][1])
                         periodic_boundary_cell = 1
                 if self.bcEast == 3:
                     if i >= self.nx - periodic_overlap:
                         west_idx = 2 * periodic_overlap - ((self.nx - 1) - i)
-                        BCState = txState[west_idx, j]
+                        BCState = srcState[west_idx, j]
                         BCState_Sed = self.State_Sed[west_idx, j].x
                         periodic_boundary_cell = 1
                     elif i == self.nx - periodic_overlap - 1:
                         west_idx = 2 * periodic_overlap - ((self.nx - 1) - i)
-                        BCState[1] = 0.5 * (BCState[1] + txState[west_idx, j][1])
+                        BCState[1] = 0.5 * (BCState[1] + srcState[west_idx, j][1])
                         periodic_boundary_cell = 1
                 ### SPONGE LAYERS
                 if (self.bcWest ==1 and i <= 2 + self.bc.BoundaryWidth):
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * (self.precision(self.bc.BoundaryWidth - i) + 2.0) / float(self.bc.BoundaryWidth - 1))), 0.005)
-                    BCState = txState[ i, j] * self.precision(gamma)
+                    BCState = srcState[ i, j] * self.precision(gamma)
                     BCState_Sed = 0.0
                 if (self.bcEast ==1 and i >= self.nx - (self.bc.BoundaryWidth) - 1 ):
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * self.precision(self.bc.BoundaryWidth - self.BoundaryNx - i) / float(self.bc.BoundaryWidth - 1))), 0.005)
-                    BCState = txState[ i, j] * self.precision(gamma)
+                    BCState = srcState[ i, j] * self.precision(gamma)
                     BCState_Sed = 0.0
                 ### SOLID WALLS
                 if self.bcWest <=1:
                     if i <= 1:
-                        BCState[0] = txState[  self.BCShift - i , j ][0]
-                        BCState[1] = -txState[  self.BCShift - i , j ][1]
+                        BCState[0] = srcState[  self.BCShift - i , j ][0]
+                        BCState[1] = -srcState[  self.BCShift - i , j ][1]
                         BCState[2] = 0.0
-                        BCState[3] = txState[  self.BCShift - i , j ][3]
+                        BCState[3] = srcState[  self.BCShift - i , j ][3]
                         BCState_Sed = 0.0
                     elif i==2:
                         BCState[1] = 0.0
                         BCState_Sed = 0.0
                 if self.bcEast <= 1:
                     if (i >=self.nx - 2):
-                        BCState[0] = txState[ self.R_x - i, j][0]
-                        BCState[1] = -txState[ self.R_x - i, j][1]
+                        BCState[0] = srcState[ self.R_x - i, j][0]
+                        BCState[1] = -srcState[ self.R_x - i, j][1]
                         BCState[2] = 0.0
-                        BCState[3] = txState[ self.R_x - i, j][3]
+                        BCState[3] = srcState[ self.R_x - i, j][3]
                         BCState_Sed = 0.0
                     elif i==self.nx-3:
                         BCState[1] = 0.0
@@ -731,8 +745,8 @@ class Solver:
                 B_west = self.Bottom[2,leftIdx,j]
                 B_east = self.Bottom[2,rightIdx,j]
 
-                state_west = txState[leftIdx,j]
-                state_east = txState[rightIdx,j]
+                state_west = srcState[leftIdx,j]
+                state_east = srcState[rightIdx,j]
 
                 eta_here =  BCState.x #
                 eta_west = state_west.x
@@ -796,7 +810,7 @@ class Solver:
         else:
             #for i,j in txState:
             for i,j in ti.ndrange((0,self.nx),(0,self.ny)):
-                BCState = txState[i,j]
+                BCState = srcState[i,j]
                 BCState_Sed = self.State_Sed[i,j].x
                 BCState_Sed = ti.max(BCState_Sed,0.0)
                 state_sum = ti.Vector([0.0, 0.0, 0.0, 0.0], self.precision)
@@ -811,66 +825,66 @@ class Solver:
                 if self.bcWest == 3:
                     if i <= periodic_overlap - 1:
                         east_idx = self.nx - 2 * periodic_overlap + i - 1
-                        BCState = txState[east_idx, j]
+                        BCState = srcState[east_idx, j]
                         BCState_Sed = self.State_Sed[east_idx, j].x
                         periodic_boundary_cell = 1
                     elif i == periodic_overlap:
                         east_idx = self.nx - 2 * periodic_overlap + i - 1
-                        BCState[1] = 0.5 * (BCState[1] + txState[east_idx, j][1])
+                        BCState[1] = 0.5 * (BCState[1] + srcState[east_idx, j][1])
                         periodic_boundary_cell = 1
                 if self.bcEast == 3:
                     if i >= self.nx - periodic_overlap:
                         west_idx = 2 * periodic_overlap - ((self.nx - 1) - i)
-                        BCState = txState[west_idx, j]
+                        BCState = srcState[west_idx, j]
                         BCState_Sed = self.State_Sed[west_idx, j].x
                         periodic_boundary_cell = 1
                     elif i == self.nx - periodic_overlap - 1:
                         west_idx = 2 * periodic_overlap - ((self.nx - 1) - i)
-                        BCState[1] = 0.5 * (BCState[1] + txState[west_idx, j][1])
+                        BCState[1] = 0.5 * (BCState[1] + srcState[west_idx, j][1])
                         periodic_boundary_cell = 1
                 if self.bcSouth == 3:
                     if j <= periodic_overlap - 1:
                         north_idx = self.ny - 2 * periodic_overlap + j - 1
-                        BCState = txState[i, north_idx]
+                        BCState = srcState[i, north_idx]
                         BCState_Sed = self.State_Sed[i, north_idx].x
                         periodic_boundary_cell = 1
                     elif j == periodic_overlap:
                         north_idx = self.ny - 2 * periodic_overlap + j - 1
-                        BCState[2] = 0.5 * (BCState[2] + txState[i, north_idx][2])
+                        BCState[2] = 0.5 * (BCState[2] + srcState[i, north_idx][2])
                         periodic_boundary_cell = 1
                 if self.bcNorth == 3:
                     if j >= self.ny - periodic_overlap:
                         south_idx = 2 * periodic_overlap - ((self.ny - 1) - j)
-                        BCState = txState[i, south_idx]
+                        BCState = srcState[i, south_idx]
                         BCState_Sed = self.State_Sed[i, south_idx].x
                         periodic_boundary_cell = 1
                     elif j == self.ny - periodic_overlap - 1:
                         south_idx = 2 * periodic_overlap - ((self.ny - 1) - j)
-                        BCState[2] = 0.5 * (BCState[2] + txState[i, south_idx][2])
+                        BCState[2] = 0.5 * (BCState[2] + srcState[i, south_idx][2])
                         periodic_boundary_cell = 1
                 ### SPONGE LAYERS
                 if (self.bcWest ==1 and i <= 2 + self.bc.BoundaryWidth):
                     s = ti.cast(self.bc.BoundaryWidth + 2 - i, self.precision) / ti.cast(self.bc.BoundaryWidth, self.precision)
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * (self.precision(self.bc.BoundaryWidth - i) + 2.0) / float(self.bc.BoundaryWidth - 1))), 0.005)
-                    state_sum += txState[i, j] * self.precision(gamma) * s
+                    state_sum += srcState[i, j] * self.precision(gamma) * s
                     weight_sum += s
                     BCState_Sed = 0.0
                 if (self.bcEast ==1 and i >= self.nx - (self.bc.BoundaryWidth) - 1 ):
                     s = ti.cast(i - (self.nx - self.bc.BoundaryWidth - 1), self.precision) / ti.cast(self.bc.BoundaryWidth, self.precision)
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * self.precision(self.bc.BoundaryWidth - self.BoundaryNx - i) / float(self.bc.BoundaryWidth - 1))), 0.005)
-                    state_sum += txState[i, j] * self.precision(gamma) * s
+                    state_sum += srcState[i, j] * self.precision(gamma) * s
                     weight_sum += s
                     BCState_Sed = 0.0
                 if (self.bcSouth ==1 and j<= 2 + self.bc.BoundaryWidth):
                     s = ti.cast(self.bc.BoundaryWidth + 2 - j, self.precision) / ti.cast(self.bc.BoundaryWidth, self.precision)
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * self.precision(self.bc.BoundaryWidth - j + 2.0) / float(self.bc.BoundaryWidth - 1))), 0.005)
-                    state_sum += txState[i, j] * self.precision(gamma) * s
+                    state_sum += srcState[i, j] * self.precision(gamma) * s
                     weight_sum += s
                     BCState_Sed = 0.0
                 if (self.bcNorth ==1 and j >= self.ny - self.bc.BoundaryWidth-1):
                     s = ti.cast(j - (self.ny - self.bc.BoundaryWidth - 1), self.precision) / ti.cast(self.bc.BoundaryWidth, self.precision)
                     gamma = ti.pow(0.5 * (0.5 + 0.5 * ti.cos(self.pi * self.precision(self.bc.BoundaryWidth - (self.BoundaryNy - j)) / (self.bc.BoundaryWidth-1))), 0.005)
-                    state_sum += txState[i, j] * self.precision(gamma) * s
+                    state_sum += srcState[i, j] * self.precision(gamma) * s
                     weight_sum += s
                     BCState_Sed = 0.0
                 if weight_sum > 0.0:
@@ -878,40 +892,40 @@ class Solver:
                 ### SOLID WALLS
                 if self.bcWest <=1:
                     if i <= 1:
-                        BCState[0] = txState[  self.BCShift - i , j ][0]
-                        BCState[1] = -txState[  self.BCShift - i , j ][1]
-                        BCState[2] = txState[  self.BCShift - i , j ][2]
-                        BCState[3] = txState[  self.BCShift - i , j ][3]
+                        BCState[0] = srcState[  self.BCShift - i , j ][0]
+                        BCState[1] = -srcState[  self.BCShift - i , j ][1]
+                        BCState[2] = srcState[  self.BCShift - i , j ][2]
+                        BCState[3] = srcState[  self.BCShift - i , j ][3]
                         BCState_Sed = 0.0
                     elif i==2:
                         BCState[1] = 0.0
                         BCState_Sed = 0.0
                 if self.bcEast <= 1:
                     if (i >=self.nx - 2):
-                        BCState[0] = txState[ self.R_x - i, j][0]
-                        BCState[1] = -txState[ self.R_x - i, j][1]
-                        BCState[2] = txState[ self.R_x - i, j][2]
-                        BCState[3] = txState[ self.R_x - i, j][3]
+                        BCState[0] = srcState[ self.R_x - i, j][0]
+                        BCState[1] = -srcState[ self.R_x - i, j][1]
+                        BCState[2] = srcState[ self.R_x - i, j][2]
+                        BCState[3] = srcState[ self.R_x - i, j][3]
                         BCState_Sed = 0.0
                     elif i==self.nx-3:
                         BCState[1] = 0.0
                         BCState_Sed = 0.0
                 if self.bcSouth <= 1:
                     if j <= 1:
-                        BCState[0] = txState[i, self.BCShift - j][0]
-                        BCState[1] = txState[i, self.BCShift - j][1]
-                        BCState[2] = -txState[i, self.BCShift - j][2]
-                        BCState[3] = txState[i, self.BCShift - j][3]
+                        BCState[0] = srcState[i, self.BCShift - j][0]
+                        BCState[1] = srcState[i, self.BCShift - j][1]
+                        BCState[2] = -srcState[i, self.BCShift - j][2]
+                        BCState[3] = srcState[i, self.BCShift - j][3]
                         BCState_Sed = 0.0
                     elif j == 2:
                         BCState[2] = 0.0
                         BCState_Sed = 0.0
                 if self.bcNorth <=1:
                     if j>=self.ny-2:
-                        BCState[0] = txState[ i, self.R_y - j][0]
-                        BCState[1] = txState[ i, self.R_y - j][1]
-                        BCState[2] = -txState[ i, self.R_y - j][2]
-                        BCState[3] = txState[ i, self.R_y - j][3]
+                        BCState[0] = srcState[ i, self.R_y - j][0]
+                        BCState[1] = srcState[ i, self.R_y - j][1]
+                        BCState[2] = -srcState[ i, self.R_y - j][2]
+                        BCState[3] = srcState[ i, self.R_y - j][3]
                         BCState_Sed = 0.0
                     elif j==self.ny-3:
                         BCState[2] = 0.0
@@ -919,28 +933,28 @@ class Solver:
                 # Resolve corner cells with a true double reflection instead of
                 # letting the last processed wall overwrite the first one.
                 if i <= 1 and j <= 1 and self.bcWest <= 1 and self.bcSouth <= 1:
-                    BCState[0] = txState[self.BCShift - i, self.BCShift - j][0]
-                    BCState[1] = -txState[self.BCShift - i, self.BCShift - j][1]
-                    BCState[2] = -txState[self.BCShift - i, self.BCShift - j][2]
-                    BCState[3] = txState[self.BCShift - i, self.BCShift - j][3]
+                    BCState[0] = srcState[self.BCShift - i, self.BCShift - j][0]
+                    BCState[1] = -srcState[self.BCShift - i, self.BCShift - j][1]
+                    BCState[2] = -srcState[self.BCShift - i, self.BCShift - j][2]
+                    BCState[3] = srcState[self.BCShift - i, self.BCShift - j][3]
                     BCState_Sed = 0.0
                 if i <= 1 and j >= self.ny - 2 and self.bcWest <= 1 and self.bcNorth <= 1:
-                    BCState[0] = txState[self.BCShift - i, self.R_y - j][0]
-                    BCState[1] = -txState[self.BCShift - i, self.R_y - j][1]
-                    BCState[2] = -txState[self.BCShift - i, self.R_y - j][2]
-                    BCState[3] = txState[self.BCShift - i, self.R_y - j][3]
+                    BCState[0] = srcState[self.BCShift - i, self.R_y - j][0]
+                    BCState[1] = -srcState[self.BCShift - i, self.R_y - j][1]
+                    BCState[2] = -srcState[self.BCShift - i, self.R_y - j][2]
+                    BCState[3] = srcState[self.BCShift - i, self.R_y - j][3]
                     BCState_Sed = 0.0
                 if i >= self.nx - 2 and j <= 1 and self.bcEast <= 1 and self.bcSouth <= 1:
-                    BCState[0] = txState[self.R_x - i, self.BCShift - j][0]
-                    BCState[1] = -txState[self.R_x - i, self.BCShift - j][1]
-                    BCState[2] = -txState[self.R_x - i, self.BCShift - j][2]
-                    BCState[3] = txState[self.R_x - i, self.BCShift - j][3]
+                    BCState[0] = srcState[self.R_x - i, self.BCShift - j][0]
+                    BCState[1] = -srcState[self.R_x - i, self.BCShift - j][1]
+                    BCState[2] = -srcState[self.R_x - i, self.BCShift - j][2]
+                    BCState[3] = srcState[self.R_x - i, self.BCShift - j][3]
                     BCState_Sed = 0.0
                 if i >= self.nx - 2 and j >= self.ny - 2 and self.bcEast <= 1 and self.bcNorth <= 1:
-                    BCState[0] = txState[self.R_x - i, self.R_y - j][0]
-                    BCState[1] = -txState[self.R_x - i, self.R_y - j][1]
-                    BCState[2] = -txState[self.R_x - i, self.R_y - j][2]
-                    BCState[3] = txState[self.R_x - i, self.R_y - j][3]
+                    BCState[0] = srcState[self.R_x - i, self.R_y - j][0]
+                    BCState[1] = -srcState[self.R_x - i, self.R_y - j][1]
+                    BCState[2] = -srcState[self.R_x - i, self.R_y - j][2]
+                    BCState[3] = srcState[self.R_x - i, self.R_y - j][3]
                     BCState_Sed = 0.0
                 ### INCOMING WALLS
                 if self.bcWest ==2 and i<=2:
@@ -1064,10 +1078,10 @@ class Solver:
                 B_west = self.Bottom[2,leftIdx,j]
                 B_east = self.Bottom[2,rightIdx,j]
 
-                state_south = txState[i,downIdx]
-                state_north = txState[i,upIdx]
-                state_west = txState[leftIdx,j]
-                state_east = txState[rightIdx,j]
+                state_south = srcState[i,downIdx]
+                state_north = srcState[i,upIdx]
+                state_west = srcState[leftIdx,j]
+                state_east = srcState[rightIdx,j]
 
                 eta_here =  BCState.x #
                 eta_west = state_west.x
@@ -1667,10 +1681,10 @@ class Solver:
                             mass_diff_x = 0.0
                             wall_x = 1
                             if hc_c > self.delta and eta_c > B_e:
-                                mass_diff_x = -(eta_c - B_e)
+                                mass_diff_x = -ti.min(eta_c - B_e, hc_c)
                                 wall_x = 0
                             elif hc_e > self.delta and eta_e > B_here:
-                                mass_diff_x = eta_e - B_here
+                                mass_diff_x = ti.min(eta_e - B_here, hc_e)
                                 wall_x = 0
 
                     xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
@@ -1772,7 +1786,8 @@ class Solver:
                 if self.wd_conserving == 1:
                     # Wet/dry face: the dry side holds no water (Pass1), so the
                     # diffusive term carries the head of the wet surface above the
-                    # dry cell's bed (gravity-driven wetting) and is zero when the
+                    # dry cell's bed, capped at the wet cell's own depth so a steep
+                    # drop cannot drain more than the cell holds, and is zero when the
                     # dry bed stands above the water (a wall). Both-wet faces keep
                     # the full central-upwind term.
                     eta_c = self.State[i,j][0]
@@ -1790,19 +1805,19 @@ class Solver:
                         mass_diff_x = 0.0
                         wall_x = 1
                         if hc_c > self.delta and eta_c > B_e:
-                            mass_diff_x = -(eta_c - B_e)
+                            mass_diff_x = -ti.min(eta_c - B_e, hc_c)
                             wall_x = 0
                         elif hc_e > self.delta and eta_e > B_here:
-                            mass_diff_x = eta_e - B_here
+                            mass_diff_x = ti.min(eta_e - B_here, hc_e)
                             wall_x = 0
                     if hc_c <= self.delta or hc_n <= self.delta:
                         mass_diff_y = 0.0
                         wall_y = 1
                         if hc_c > self.delta and eta_c > B_n:
-                            mass_diff_y = -(eta_c - B_n)
+                            mass_diff_y = -ti.min(eta_c - B_n, hc_c)
                             wall_y = 0
                         elif hc_n > self.delta and eta_n > B_here:
-                            mass_diff_y = eta_n - B_here
+                            mass_diff_y = ti.min(eta_n - B_here, hc_n)
                             wall_y = 0
 
                 xflux = ti.Vector([0.0, 0.0, 0.0, 0.0],self.precision)
@@ -2839,8 +2854,13 @@ class Solver:
 
 
 
+    def Pass_Breaking(self, time):
+        """Wave-breaking step; neighbour reads come from a snapshot (see StateScratch)."""
+        self.copy_states(self.Breaking, self.BreakingScratch)
+        self._pass_breaking(time)
+
     @ti.kernel
-    def Pass_Breaking(self,time:ti.f32):
+    def _pass_breaking(self,time:ti.f32):
         """
         Wave-breaking model step (used if useBreakingModel == True):
           - Applies Kennedy et al. wave breaking logic to compute local 
@@ -2864,20 +2884,20 @@ class Solver:
                     detadt = self.dU_by_dt[i,j].x
 
                     # Look the dominant direction of flow, and look at the three cells on that 3*3 cube
-                    t_here = self.Breaking[i,j].x
+                    t_here = self.BreakingScratch[i,j].x
                     t1 = 0.0
                     #t2 = 0.0
                     #t3 = 0.0
 
                     
                     if P_here > 0.0:
-                            t1 = self.Breaking[leftIdx,j].x
-                            #t2 = self.Breaking[leftIdx,upIdx].x
-                            #t3 = self.Breaking[leftIdx,downIdx].x
+                            t1 = self.BreakingScratch[leftIdx,j].x
+                            #t2 = self.BreakingScratch[leftIdx,upIdx].x
+                            #t3 = self.BreakingScratch[leftIdx,downIdx].x
                     else:
-                            t1 = self.Breaking[rightIdx,j].x
-                            #t2 = self.Breaking[rightIdx,upIdx].x
-                            #t3 = self.Breaking[rightIdx,downIdx].x
+                            t1 = self.BreakingScratch[rightIdx,j].x
+                            #t2 = self.BreakingScratch[rightIdx,upIdx].x
+                            #t3 = self.BreakingScratch[rightIdx,downIdx].x
                     
 
                     #t_here = ti.max(t_here, ti.max(t1, ti.max(t2, t3)))
@@ -2977,29 +2997,29 @@ class Solver:
                 detadt = self.dU_by_dt[i,j].x
 
                 # Look the dominant direction of flow, and look at the three cells on that 3*3 cube
-                t_here = self.Breaking[i,j].x
+                t_here = self.BreakingScratch[i,j].x
                 t1 = 0.0
                 t2 = 0.0
                 t3 = 0.0
 
                 if ti.abs(P_here) > ti.abs(Q_here):
                     if P_here > 0.0:
-                        t1 = self.Breaking[leftIdx,j].x
-                        t2 = self.Breaking[leftIdx,upIdx].x
-                        t3 = self.Breaking[leftIdx,downIdx].x
+                        t1 = self.BreakingScratch[leftIdx,j].x
+                        t2 = self.BreakingScratch[leftIdx,upIdx].x
+                        t3 = self.BreakingScratch[leftIdx,downIdx].x
                     else:
-                        t1 = self.Breaking[rightIdx,j].x
-                        t2 = self.Breaking[rightIdx,upIdx].x
-                        t3 = self.Breaking[rightIdx,downIdx].x
+                        t1 = self.BreakingScratch[rightIdx,j].x
+                        t2 = self.BreakingScratch[rightIdx,upIdx].x
+                        t3 = self.BreakingScratch[rightIdx,downIdx].x
                 else:
                     if Q_here > 0.0:
-                        t1 = self.Breaking[i,downIdx].x
-                        t2 = self.Breaking[rightIdx,downIdx].x
-                        t3 = self.Breaking[leftIdx,downIdx].x
+                        t1 = self.BreakingScratch[i,downIdx].x
+                        t2 = self.BreakingScratch[rightIdx,downIdx].x
+                        t3 = self.BreakingScratch[leftIdx,downIdx].x
                     else:
-                        t1 = self.Breaking[i,upIdx].x
-                        t2 = self.Breaking[rightIdx,upIdx].x
-                        t3 = self.Breaking[leftIdx,upIdx].x
+                        t1 = self.BreakingScratch[i,upIdx].x
+                        t2 = self.BreakingScratch[rightIdx,upIdx].x
+                        t3 = self.BreakingScratch[leftIdx,upIdx].x
 
                 t_here = ti.max(t_here, ti.max(t1, ti.max(t2, t3)))
 

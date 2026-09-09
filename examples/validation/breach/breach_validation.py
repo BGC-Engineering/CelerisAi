@@ -26,7 +26,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "malpasset"))
-from read_selafin import read_selafin  # noqa: E402
+from read_selafin import read_selafin
 
 MESH_DIR = Path.home() / "telemac-mascaret/examples/telemac2d/breach"
 TELEMAC_REF = Path("/mnt/d/Homathko/Validation/telemac/breach_nobreach_restart")
@@ -68,7 +68,7 @@ def prep(out: Path) -> None:
     ini = read_selafin(MESH_DIR / "ini_breach.slf")
     assert ini["npoin"] == geo["npoin"]
     v = {n: ini["values"][0, k] for k, n in enumerate(ini["varnames"])}
-    nx, ny = int(round(5000.0 / DX_M)) + 2 * PAD, int(round(500.0 / DX_M)) + 2 * PAD
+    nx, ny = round(5000.0 / DX_M) + 2 * PAD, round(500.0 / DX_M) + 2 * PAD
     xs, ys = (np.arange(nx) - PAD) * DX_M, (np.arange(ny) - PAD) * DX_M
     xg, yg = np.meshgrid(xs, ys, indexing="ij")
     # Interpolate nodal depth and momentum, not the free surface: dry nodes carry
@@ -123,6 +123,7 @@ def prep(out: Path) -> None:
 
 def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
     import taichi as ti
+
     from celeris.domain import BoundaryConditions, Domain, Topodata
     from celeris.hydrograph import HydrographSource
     from celeris.runner import Evolve
