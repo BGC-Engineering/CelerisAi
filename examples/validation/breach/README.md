@@ -12,8 +12,8 @@ case; TELEMAC is the reference.
 8.0 m at x = 2000) separates the channel from a 500 m wide dry floodplain.
 Inflow rises linearly from 50 m3/s at t = 0 to 406 m3/s at t = 2700 s; the outlet
 free surface is prescribed (0.87 to 2.49 m). Initial state: developed flow at
-50 m3/s from `ini_breach.slf`. TELEMAC overtops the dyke from t = 2110 s and has
-64 % of the floodplain wet at 2700 s.
+50 m3/s from `ini_breach.slf`. TELEMAC overtops the dyke from t = 2090 s and has
+26 % of the floodplain area wet at 2700 s (8 % at 2400 s).
 
 ## Celeris setup (`breach_validation.py`)
 

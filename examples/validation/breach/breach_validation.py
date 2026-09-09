@@ -147,7 +147,9 @@ def run(out: Path, duration_s: float) -> None:
         friction=MANNING_N,
         Courant=COURANT,
     )
-    solver = Solver(domain=dom, boundary_conditions=bc, model="SWE", infiltrationRate=0.0)
+    solver = Solver(
+        domain=dom, boundary_conditions=bc, model="SWE", infiltrationRate=0.0
+    )
     solver.landslide = HydrographSource(
         solver, g["inlet"], LIQ_T_S, LIQ_Q_M3S, min_depth_m=0.2
     )
@@ -158,7 +160,12 @@ def run(out: Path, duration_s: float) -> None:
     state[:, :, 1] = g["hu0"]
     state[:, :, 2] = g["hv0"]
     solver.InitStates()
-    for f in (solver.State, solver.stateUVstar, solver.NewState, solver.current_stateUVstar):
+    for f in (
+        solver.State,
+        solver.stateUVstar,
+        solver.NewState,
+        solver.current_stateUVstar,
+    ):
         f.from_numpy(state)
     solver.InitStates = lambda: None  # keep Evolve_0 from zeroing the state again
     evolve.Evolve_0()
@@ -225,6 +232,27 @@ def run(out: Path, duration_s: float) -> None:
     print(f"wall {time.perf_counter() - t0:.0f}s -> {out / 'results.npz'}", flush=True)
 
 
+def _telemac_floodplain_wet_fraction(out: Path):
+    """TELEMAC wet AREA fraction of the floodplain on the Celeris grid (h > DRY_M).
+
+    Node counts would over-weight the dyke toe, where the mesh is 3 m, against
+    the 45 m floodplain triangles, so the depth is interpolated onto the grid.
+    """
+    from matplotlib.tri import LinearTriInterpolator, Triangulation
+
+    g = dict(np.load(out / "grid.npz"))
+    fp = g["floodplain"]
+    ii, jj = np.nonzero(fp)
+    xq, yq = ii * float(g["dx"]), jj * float(g["dx"])
+    d = np.load(TELEMAC_REF / "breach_nobreach_restart.npz")
+    tri = Triangulation(d["x"], d["y"], d["ikle"])
+    frac = [
+        float(np.mean(np.ma.filled(LinearTriInterpolator(tri, h)(xq, yq), 0.0) > DRY_M))
+        for h in d["water_depth"]
+    ]
+    return d["times"], np.array(frac)
+
+
 def compare(out: Path) -> None:
     import matplotlib
 
@@ -232,18 +260,28 @@ def compare(out: Path) -> None:
     import matplotlib.pyplot as plt
 
     r = dict(np.load(out / "results.npz"))
-    ref = np.genfromtxt(TELEMAC_REF / "free_surface_centreline.csv", delimiter=",", names=True)
+    ref = np.genfromtxt(
+        TELEMAC_REF / "free_surface_centreline.csv", delimiter=",", names=True
+    )
     t_ref = ref["time_s"]
     rows = []
     fig, axes = plt.subplots(4, 2, figsize=(11, 12), sharex=True)
     for k, (px, ax) in enumerate(zip(PROBES_X_M, axes.ravel())):
         tel = ref[f"fs_x{int(px)}"]
         cel = np.interp(t_ref, r["t_s"], r["eta_probes"][:, k])
-        for label, sel in (("t<=2100s", t_ref <= 2100.0), ("full", np.ones_like(t_ref, bool))):
+        for label, sel in (
+            ("t<=2100s", t_ref <= 2100.0),
+            ("full", np.ones_like(t_ref, bool)),
+        ):
             d = cel[sel] - tel[sel]
             rows.append(
-                dict(probe_x_m=px, window=label, rmse_m=float(np.sqrt(np.mean(d**2))),
-                     max_abs_m=float(np.abs(d).max()), bias_m=float(d.mean()))
+                dict(
+                    probe_x_m=px,
+                    window=label,
+                    rmse_m=float(np.sqrt(np.mean(d**2))),
+                    max_abs_m=float(np.abs(d).max()),
+                    bias_m=float(d.mean()),
+                )
             )
         ax.plot(t_ref, tel, "k-", label="TELEMAC-2D")
         ax.plot(t_ref, cel, "C0--", label="Celeris")
@@ -251,8 +289,9 @@ def compare(out: Path) -> None:
         ax.set_ylabel("Elevation (m)")
         ax.grid(alpha=0.3)
     ax = axes.ravel()[-1]
+    t_fp, wet_tel = _telemac_floodplain_wet_fraction(out)
+    ax.plot(t_fp, wet_tel, "k-", label="TELEMAC-2D")
     ax.plot(r["t_s"], r["floodplain_wet_fraction"], "C0--", label="Celeris")
-    ax.plot([2110, 2400, 2700], [0.0, 0.28, 0.64], "ko", label="TELEMAC-2D (README)")
     ax.set_title("Floodplain Wet Fraction (h > 1 cm)")
     ax.set_ylabel("Fraction")
     ax.grid(alpha=0.3)
@@ -267,10 +306,15 @@ def compare(out: Path) -> None:
         wri.writeheader()
         wri.writerows(rows)
     wet = r["floodplain_wet_fraction"]
-    first_wet = r["t_s"][np.argmax(wet > 0.0)] if (wet > 0).any() else np.nan
-    print(f"floodplain first wet: Celeris {first_wet:.0f} s vs TELEMAC 2110 s")
-    for tq, ref_frac in ((2400.0, 0.28), (2700.0, 0.64)):
-        print(f"wet fraction at {tq:.0f} s: Celeris {np.interp(tq, r['t_s'], wet):.3f} vs TELEMAC {ref_frac}")
+    first = lambda tt, w: tt[np.argmax(w > 0.0)] if (w > 0).any() else np.nan
+    print(
+        f"floodplain first wet: Celeris {first(r['t_s'], wet):.0f} s vs TELEMAC {first(t_fp, wet_tel):.0f} s"
+    )
+    for tq in (2400.0, 2700.0):
+        print(
+            f"wet area fraction at {tq:.0f} s: Celeris {np.interp(tq, r['t_s'], wet):.3f} "
+            f"vs TELEMAC {np.interp(tq, t_fp, wet_tel):.3f}"
+        )
     for row in rows:
         print(row)
 
@@ -281,4 +325,8 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--duration", type=float, default=DURATION_S)
     a = ap.parse_args()
-    {"prep": lambda: prep(a.out), "run": lambda: run(a.out, a.duration), "compare": lambda: compare(a.out)}[a.stage]()
+    {
+        "prep": lambda: prep(a.out),
+        "run": lambda: run(a.out, a.duration),
+        "compare": lambda: compare(a.out),
+    }[a.stage]()
