@@ -139,3 +139,21 @@ Files: `results/malpasset_max_depth[_seed].csv`, `results/malpasset_arrival[_see
   friction off below about 0.0032 base_depth = 0.17 m, so thin fast sheets are unresisted. The 15 m grid is stable.
 * Gauge/bed values come from the fine mesh rasterised at 15 m; the TELEMAC comparison run uses the small
   (13541-node) mesh. Bed at the gauge cells differs from the fine-mesh interpolation by <= 0.9 m (P10).
+
+
+## Conserving wet/dry scheme (`--wetdry conserving`)
+
+Same setup, `Solver(wetdry_scheme="conserving")`, no seed-wetting kernel, dam
+face still seeded with the 0.1 m film (`results/` tag `wd`):
+
+| | observed | TELEMAC HLLC | legacy | legacy + seed | conserving |
+|---|---|---|---|---|---|
+| A -> B (s) | 1140 | 1128 | not reached | 1216 | 1146 |
+| A -> C (s) | 1320 | 1369 | 1297 | 1310 | 1228 |
+| volume change over 4000 s | 0 | 0 | -16 % | -19 % | +0.3 % |
+
+Max depths at P6 to P14 stay within 0.4 m of the legacy values (P6 41.8, P7
+20.0, P8 25.8, P9 18.6, P10 16.7, P11 7.5, P12 8.0, P13 15.0, P14 4.9 m). The
+lateral flooding that needed the seed kernel under legacy happens on its own.
+The remaining +0.3 % volume drift comes from the clamp of sub-`delta` cells to
+the bed after a step drains them below it; small enough to leave.

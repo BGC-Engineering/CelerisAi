@@ -19,13 +19,13 @@ free surface is prescribed (0.87 to 2.49 m). Initial state: developed flow at
 
 | item | choice |
 |---|---|
-| grid | 2.5 m, 2000 x 200 cells, bed and initial depth/momentum linearly interpolated on the TELEMAC triangulation; outside the mesh hull = 20 m wall |
+| grid | 2.5 m, 2004 x 204 cells (TELEMAC domain plus a 2-cell wall pad so the ghost rim holds no physical cell), bed and initial depth/momentum linearly interpolated on the TELEMAC triangulation; outside the mesh hull = 20 m wall |
 | datum | 4.9 m a.s.l., just below the lowest floodplain cell (see finding 1) |
 | inflow | `HydrographSource` on the wet cells of the strip 10 <= x < 30 m, Q(t) from `t2d_breach.liq` |
 | outlet | free surface from the `.liq` imposed on 5 columns inside the ghost rim (post-step kernel), momentum kept |
 | friction | Manning n = 1/15 (`isManning=1`) |
 | model | SWE, Courant 0.2, `infiltrationRate=0`, no breaking model |
-| run | 2700 s = 37,400 steps, 45 s wall on an RTX A5000 |
+| run | 2700 s = 37,400 steps, 45 s wall on an RTX A5000; `--wetdry legacy` (default) or `conserving` |
 
 ```bash
 uv run python examples/validation/breach/breach_validation.py prep
@@ -38,42 +38,44 @@ README there). Large Celeris products go to `/mnt/d/Homathko/Validation/celeris/
 
 ## Results (`results/breach_metrics.csv`, `results/breach_probes.png`)
 
-Free surface at the channel centreline, Celeris minus TELEMAC:
+Free surface at the channel centreline over the full 2700 s, Celeris minus
+TELEMAC, for both wet/dry schemes of the fork (`Solver(wetdry_scheme=...)`):
 
-| x (m) | bias t <= 2100 s (m) | RMSE t <= 2100 s (m) | bias full (m) |
+| x (m) | legacy RMSE (m) | legacy bias (m) | conserving RMSE (m) | conserving bias (m) |
+|---|---|---|---|---|
+| 500 | 1.02 | +0.85 | 0.06 | +0.03 |
+| 1000 | 0.90 | +0.69 | 0.05 | +0.02 |
+| 1500 | 0.90 | +0.61 | 0.05 | +0.01 |
+| 1900 | 1.06 | +0.67 | 0.06 | +0.00 |
+| 3100 | 0.30 | -0.16 | 0.08 | -0.00 |
+| 4000 | 0.23 | -0.03 | 0.09 | -0.02 |
+| 4500 | 0.20 | +0.02 | 0.09 | -0.04 |
+
+| | TELEMAC | legacy | conserving |
 |---|---|---|---|
-| 500 | +0.15 | 0.17 | +0.20 |
-| 1000 | +0.06 | 0.11 | +0.14 |
-| 1500 | +0.11 | 0.18 | +0.25 |
-| 1900 | +0.20 | 0.31 | +0.42 |
-| 3100 | +0.02 | 0.04 | +0.05 |
-| 4000 | +0.05 | 0.05 | +0.06 |
-| 4500 | +0.08 | 0.09 | +0.08 |
+| dyke first overtopped | 2090 s | never | 2021 s |
+| floodplain wet area at 2400 s | 8 % | 0 % | 16 % |
+| floodplain wet area at 2700 s | 26 % | 0 % | 42 % |
+| run | | blows up at 2628 s | stable |
 
-Downstream of the dyke the two models agree to a few centimetres for the whole
-run. Discharge profiles Q(x) agree within 3 m3/s from x = 1000 m down (t = 1000 s:
-132 vs 128 at x = 1000, 62 vs 63 at x = 2500, 42 vs 43 at x = 4900).
+With the conserving scheme the two models agree to within 5 to 9 cm RMSE at
+every probe and the channel discharge Q(x) matches within 3 m3/s. Celeris
+floods the plain earlier and wider than TELEMAC once the dyke is overtopped;
+the sill rule (a wet surface above a dry cell's bed drives a dam-break flux
+capped at the wet depth) is more permissive than TELEMAC's finite-element
+wetting. Not tuned.
 
-Two things do not agree, and neither is the hydrograph source:
+The legacy scheme on this padded grid is worse than on the unpadded grid of
+the first version of this case (bias 0.15 to 0.4 m): the bank cells are now
+interior cells next to dry ones, and legacy drains momentum across every
+wet/dry face (a numerical wall drag: bank velocity 0.2 m/s next to 1.8 m/s
+mid-channel), backs the water up, never overtops, and blows up late in the run.
 
-**Inlet hump.** The injected water has no momentum and sits against the x = 0
-wall, so the level in the first ~500 m rises to drive the flow: +0.3 m at
-x = 100 m at t = 300 s, +0.6 m at t = 1000 s, decaying to +0.05 m by x = 1000 m.
-Lengthening the inlet strip to 200 m changes nothing. Keep probes and results
-at least ~1 km from a channel inlet, or inject into a lake, where a hump does
-not form. TELEMAC imposes Q with a velocity profile and has no hump.
+**Inlet hump (both schemes).** The injected water has no momentum and sits
+against the x = 0 wall; the level in the first ~500 m rises to drive the flow.
+Keep probes at least ~1 km from a channel inlet, or inject into a lake.
 
-**No overtopping.** Celeris never wets the dyke or the floodplain even though
-its own level at x = 1900 m exceeds the 8.0 m crest after ~2100 s; the excess
-water instead backs up upstream (the bias growth after 2100 s). Cause: `Pass2`
-zeroes the mass flux across a wet/dry interface (`if minH <= delta:
-mass_diff = 0`), so water only enters a dry cell carried by momentum already
-pointing at it. Cross-channel momentum is ~0 here, so a slowly rising level
-cannot spill over a dry crest. The Malpasset case (`../malpasset`) hits the same
-rule: a flat reservoir against a dry bed is frozen until a film is seeded, and a
-flood front stalls on flat ground with 3.4 m of head 30 m away.
-
-## Findings that apply to any Celeris run
+## Findings that apply to any Celeris run (all fixed by `wetdry_scheme="conserving"`)
 
 1. **Dry terrain must lie above the datum.** With the datum above the dyke
    (bed <= 0 everywhere) the solver manufactured ~10,000 m3 of water on the dyke
@@ -87,9 +89,13 @@ flood front stalls on flat ground with 3.4 m of head 30 m away.
    sits on the sloping banks: sub-`delta` inflow into a dry cell is reset to
    `eta = bed` by `BoundaryPass` each step and discarded. Malpasset loses 16 %
    over 4000 s by the same route.
-3. **Wetting needs momentum** (above). A rising lake will not wet its shore or
-   spill over a crest unless a wave carries water there. This matters for any
-   level-rise problem and is a solver fix, not a case-setup fix.
+3. **Wetting needs momentum** (legacy). A rising lake will not wet its shore or
+   spill over a crest unless a wave carries water there; the conserving scheme
+   adds gravity-driven wetting.
+5. **Run-to-run reproducibility.** Upstream `BoundaryPass` and `Pass_Breaking`
+   read neighbours of the field they write; two identical GPU runs differed by
+   centimetres to metres at wet/dry fronts. Both now read from a snapshot, in
+   both schemes, and identical runs are bitwise equal.
 4. `infiltrationRate` defaults to 0.001 m/s on every cell with bed above the
    datum. Set it to 0 for anything longer than a few minutes.
 

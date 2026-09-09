@@ -159,3 +159,13 @@ Consequences for the switch test:
   scatter tables above (`compare` prints them), and expect frame max |delta| to fail
   at 1e-3 on the wet/dry cases whatever the code does. A bit-exact proof needs the two
   races fixed first (then `check --tol 1e-3` becomes meaningful for all eight cases).
+
+
+## Update: races fixed, `--wetdry` added
+
+`BoundaryPass` and `Pass_Breaking` now read from a snapshot (`StateScratch`,
+`BreakingScratch`), so identical runs are bitwise equal and `check --tol 1e-3`
+is meaningful again. The `legacy` baseline above was frozen with the racy code;
+`legacy_det` is the deterministic legacy baseline and `conserving` the same
+cases with `--wetdry conserving`. The breach case was padded by two wall cells
+after `legacy` was frozen, so its frames do not align with that first tag.

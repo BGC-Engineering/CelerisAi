@@ -66,6 +66,7 @@ def run_case(
     max_steps: int | None = None,
     extra_frame_steps: dict[str, int] | None = None,
     no_breaking: bool = False,
+    wetdry: str = "legacy",
 ) -> dict[str, object]:
     """Run one case and write ``fields.npz`` + ``metrics.json`` to ``out_dir``.
 
@@ -76,6 +77,9 @@ def run_case(
         extra_frame_steps: Additional ``{label: step}`` frames to capture.
         no_breaking: Force the wave-breaking model off after the build
             (``Pass_Breaking`` is not run-to-run deterministic, see README).
+        wetdry: ``Solver`` wet/dry scheme, ``legacy`` or ``conserving``. Set
+            after the build; the kernels read it as a constant when they compile
+            on the first step.
 
     Returns:
         The metrics dict that was written.
@@ -89,6 +93,10 @@ def run_case(
     solver, evolve, dt, n_steps = run.solver, run.evolve, run.dt, run.n_steps
     if no_breaking:
         solver.useBreakingModel = False
+    if wetdry not in ("legacy", "conserving"):
+        raise ValueError(wetdry)
+    solver.wetdry_scheme = wetdry
+    solver.wd_conserving = 1 if wetdry == "conserving" else 0
     env = _envelope(solver)
     bed0 = solver.Bottom.to_numpy()[2].astype(np.float32)
     dx, dy = float(solver.dx), float(solver.dy)
@@ -188,6 +196,7 @@ def run_case(
         "duration_s": n_steps * dt,
         "sample_every": every,
         "breaking_model": bool(solver.useBreakingModel),
+        "wetdry_scheme": wetdry,
         "blowup_step": blowup,
         "max_eta_m": float(np.nanmax(emax)),
         "min_eta_m": float(np.nanmin(emin)),
@@ -229,6 +238,7 @@ def freeze(
     only: list[str] | None,
     max_steps: int | None,
     no_breaking: bool = False,
+    wetdry: str = "legacy",
 ) -> Path:
     """Run every (or the selected) case in a subprocess into ``root/tag``."""
     names = only or list(cases.CASES)
@@ -239,6 +249,7 @@ def freeze(
             cmd += ["--max-steps", str(max_steps)]
         if no_breaking:
             cmd += ["--no-breaking"]
+        cmd += ["--wetdry", wetdry]
         t0 = time.perf_counter()
         rc = subprocess.run(cmd, cwd=cases.CELERIS_DIR, check=False).returncode
         logger.info(
@@ -488,6 +499,7 @@ def main() -> None:
             action="store_true",
             help="force useBreakingModel off (removes the Pass_Breaking race, see README)",
         )
+        p.add_argument("--wetdry", default="legacy", choices=["legacy", "conserving"])
         if c == "check":
             p.add_argument("--tol", type=float, default=1e-3)
     p = sub.add_parser("compare")
@@ -501,6 +513,7 @@ def main() -> None:
     p.add_argument("out_dir", type=Path)
     p.add_argument("--max-steps", type=int)
     p.add_argument("--no-breaking", action="store_true")
+    p.add_argument("--wetdry", default="legacy", choices=["legacy", "conserving"])
     a = ap.parse_args()
     if a.cmd == "_run":
         run_case(
@@ -508,6 +521,7 @@ def main() -> None:
             out_dir=a.out_dir,
             max_steps=a.max_steps,
             no_breaking=a.no_breaking,
+            wetdry=a.wetdry,
         )
     elif a.cmd == "freeze":
         freeze(
@@ -516,6 +530,7 @@ def main() -> None:
             only=a.only,
             max_steps=a.max_steps,
             no_breaking=a.no_breaking,
+            wetdry=a.wetdry,
         )
     elif a.cmd == "check":
         new = freeze(
@@ -524,6 +539,7 @@ def main() -> None:
             only=a.only,
             max_steps=a.max_steps,
             no_breaking=a.no_breaking,
+            wetdry=a.wetdry,
         )
         compare(a=a.root / a.tag, b=new, tol=a.tol)
     elif a.cmd == "compare":
