@@ -196,3 +196,113 @@ def test_stoker_dam_break_matches_analytic(tmp_path: Path) -> None:
     l1 = np.abs(depth[interior] - exact[interior]).mean()
     assert np.isfinite(depth).all()
     assert l1 < 0.02  # 2 % of the upstream depth
+
+
+# ---------------------------------------------------------------------------
+# wetdry_scheme="conserving" (see Solver): behaviours the legacy scheme lacks.
+# ---------------------------------------------------------------------------
+
+
+def _build_channel(tmp_path: Path, scheme: str) -> tuple[Solver, Evolve]:
+    """Flat 40 x 8 m basin, 1 m deep, walled; the tests then overwrite the bed."""
+    ti.init(arch=ti.cpu, default_fp=ti.f32)
+    xs, ys = np.linspace(0.0, 40.0, 81), np.linspace(0.0, 8.0, 17)
+    xg, yg = np.meshgrid(xs, ys)
+    np.savetxt(
+        tmp_path / "basin.xyz",
+        np.column_stack([xg.ravel(), yg.ravel(), np.ones(xg.size)]),
+    )
+    topo = Topodata(filename="basin.xyz", path=str(tmp_path), datatype="xyz")
+    bc = BoundaryConditions(celeris=False, North=0, South=0, East=0, West=0)
+    domain = Domain(topodata=topo, x1=0.0, x2=40.0, y1=0.0, y2=8.0, Nx=160, Ny=32)
+    solver = Solver(
+        domain=domain, boundary_conditions=bc, model="SWE", wetdry_scheme=scheme
+    )
+    return solver, Evolve(solver=solver, maxsteps=1)
+
+
+def _start(
+    solver: Solver, run: Evolve, bed: np.ndarray, level: float, dry=None
+) -> None:
+    """Install ``bed`` and still water at ``level`` (dry where bed is higher,
+    and wherever ``dry`` is True: a dam-break start with a dry low side)."""
+    bed32 = bed.astype(np.float32)
+    solver.Bottom.from_numpy(np.stack([bed32, bed32, bed32, np.zeros_like(bed32)]))
+    solver.fill_bottom_field()
+    solver.InitStates()
+    eta = np.where(bed < level, level, bed)
+    if dry is not None:
+        eta = np.where(dry, bed, eta)
+    _set_eta(solver, eta)
+    solver.InitStates = lambda: None  # Evolve_0 would zero the state again
+    run.Evolve_0()
+
+
+def _banked_bed(solver: Solver) -> np.ndarray:
+    """Channel bed at -1 m with 1:1 banks rising to +0.5 m at both y edges."""
+    j = np.arange(solver.ny)
+    rise = np.clip(np.abs(j - (solver.ny - 1) / 2.0) * solver.dy - 2.0, 0.0, 1.5)
+    return np.broadcast_to((-1.0 + rise)[None, :], (solver.nx, solver.ny)).copy()
+
+
+@pytest.mark.parametrize("scheme,tol", [("conserving", 0.01), ("legacy", 0.20)])
+def test_sloping_banks_conserve_injected_volume(tmp_path: Path, scheme, tol) -> None:
+    """Inflow into a channel with wet/dry banks. Conserving keeps the volume to
+    1 %; legacy loses several percent at the banks (bounded, not pinned)."""
+    solver, run = _build_channel(tmp_path, scheme)
+    bed = _banked_bed(solver)
+    inlet = _strip_mask(solver, 10, 14) & (bed < -0.7)
+    src = HydrographSource(solver, inlet, [0.0, 30.0], [1.0, 1.0])
+    solver.landslide = src
+    _start(solver, run, bed, -0.3)
+    v0 = _wet_volume(solver)
+    dt = float(solver.dt)
+    for i in range(round(30.0 / dt)):
+        run.Evolve_Steps(i)
+    assert np.isfinite(solver.State.to_numpy()).all()
+    assert _wet_volume(solver) - v0 == pytest.approx(src.volume_m3, rel=tol)
+
+
+def test_still_water_above_dry_shelf_floods_it(tmp_path: Path) -> None:
+    """Water at rest whose surface stands above a dry shelf must flood it
+    (dam-break onto dry bed). Legacy is frozen: no momentum, no flux."""
+    wet_frac = {}
+    for scheme in ("legacy", "conserving"):
+        solver, run = _build_channel(tmp_path, scheme)
+        bed = np.full((solver.nx, solver.ny), -1.0)
+        shelf_cols = np.arange(solver.nx) >= round(30.0 / solver.dx)
+        bed[shelf_cols, :] = 0.4  # shelf above the datum
+        # Dam-break start: water at 0.6 m on the left, the shelf dry although
+        # it lies 0.2 m below that surface.
+        _start(solver, run, bed, 0.6, dry=shelf_cols[:, None])
+        v0 = _wet_volume(solver)
+        dt = float(solver.dt)
+        for i in range(round(40.0 / dt)):
+            run.Evolve_Steps(i)
+        eta, depth = _eta(solver), _eta(solver) - bed
+        shelf = np.zeros_like(bed, bool)
+        shelf[round(30.0 / solver.dx) : -2, 2:-2] = True
+        wet_frac[scheme] = float(np.mean(depth[shelf] > 0.01))
+        # final flat level: 30*8*1.6 m3 over 40*8 m2 with the 0.4 m shelf -> 0.55 m
+        if scheme == "conserving":
+            assert _wet_volume(solver) == pytest.approx(v0, rel=0.01)
+            assert eta[INNER].std() < 0.02  # settles to one flat surface
+    assert wet_frac["conserving"] > 0.95, wet_frac
+    assert wet_frac["legacy"] < 0.05, wet_frac
+
+
+def test_still_water_below_datum_stays_dry_on_land(tmp_path: Path) -> None:
+    """Land below the datum must not fill with water (legacy writes eta = 0,
+    the datum, into fully dry cells)."""
+    solver, run = _build_channel(tmp_path, "conserving")
+    bed = np.full((solver.nx, solver.ny), -3.0)
+    bed[:, 16:] = -1.0  # land at -1 m, below the datum; water at -2 m
+    _start(solver, run, bed, -2.0)
+    dt = float(solver.dt)
+    for i in range(round(30.0 / dt)):
+        run.Evolve_Steps(i)
+    eta = _eta(solver)[INNER]
+    b = bed[INNER]
+    land = b > -1.5
+    assert np.abs(eta - b)[land].max() < 1e-4
+    assert np.abs(eta + 2.0)[~land].max() < 1e-4

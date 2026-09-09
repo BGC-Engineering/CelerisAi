@@ -26,7 +26,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "malpasset"))
-from read_selafin import read_selafin  # noqa: E402
+from read_selafin import read_selafin
 
 MESH_DIR = Path.home() / "telemac-mascaret/examples/telemac2d/breach"
 TELEMAC_REF = Path("/mnt/d/Homathko/Validation/telemac/breach_nobreach_restart")
@@ -49,6 +49,7 @@ PROBES_X_M = (500.0, 1000.0, 1500.0, 1900.0, 3100.0, 4000.0, 4500.0)
 PROBE_Y_M = 13.0  # channel centreline (TELEMAC README)
 INLET_X_M = (10.0, 30.0)
 OUTLET_COLS = 5  # stage-controlled columns inside the 2-cell ghost rim
+PAD = 2  # wall cells around the TELEMAC domain so the ghost rim holds no physical cell
 # t2d_breach.liq: inflow Q (boundary 2) and outlet free surface (boundary 1)
 LIQ_T_S = np.array([0.0, 7200.0, 18800.0])
 LIQ_Q_M3S = np.array([50.0, 1000.0, 50.0])
@@ -67,8 +68,8 @@ def prep(out: Path) -> None:
     ini = read_selafin(MESH_DIR / "ini_breach.slf")
     assert ini["npoin"] == geo["npoin"]
     v = {n: ini["values"][0, k] for k, n in enumerate(ini["varnames"])}
-    nx, ny = int(round(5000.0 / DX_M)), int(round(500.0 / DX_M))
-    xs, ys = np.arange(nx) * DX_M, np.arange(ny) * DX_M
+    nx, ny = round(5000.0 / DX_M) + 2 * PAD, round(500.0 / DX_M) + 2 * PAD
+    xs, ys = (np.arange(nx) - PAD) * DX_M, (np.arange(ny) - PAD) * DX_M
     xg, yg = np.meshgrid(xs, ys, indexing="ij")
     # Interpolate nodal depth and momentum, not the free surface: dry nodes carry
     # eta = bed, so interpolating eta across a wet/dry bank perches spurious water
@@ -87,16 +88,20 @@ def prep(out: Path) -> None:
     hv = np.where(depth > 0, hv.filled(0.0), 0.0)
     inlet = (xg >= INLET_X_M[0]) & (xg < INLET_X_M[1]) & (depth > 0.3)
     outlet = np.zeros_like(inlet)
-    outlet[nx - 2 - OUTLET_COLS : nx - 2, :] = True
+    outlet[nx - PAD - OUTLET_COLS : nx - PAD, :] = True
     outlet &= inside & (bed < 6.0)  # channel section only
     floodplain = inside & (yg > 42.0) & (xg > 2000.0) & (xg < 3000.0)
     probes = np.array(
-        [[int(round(px / DX_M)), int(round(PROBE_Y_M / DX_M))] for px in PROBES_X_M]
+        [
+            [int(round(px / DX_M)) + PAD, int(round(PROBE_Y_M / DX_M)) + PAD]
+            for px in PROBES_X_M
+        ]
     )
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         out / "grid.npz",
         dx=DX_M,
+        pad=PAD,
         datum=DATUM_M,
         bed=bed.astype(np.float32),
         eta0=eta.astype(np.float32),
@@ -116,8 +121,9 @@ def prep(out: Path) -> None:
     )
 
 
-def run(out: Path, duration_s: float) -> None:
+def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
     import taichi as ti
+
     from celeris.domain import BoundaryConditions, Domain, Topodata
     from celeris.hydrograph import HydrographSource
     from celeris.runner import Evolve
@@ -148,7 +154,11 @@ def run(out: Path, duration_s: float) -> None:
         Courant=COURANT,
     )
     solver = Solver(
-        domain=dom, boundary_conditions=bc, model="SWE", infiltrationRate=0.0
+        domain=dom,
+        boundary_conditions=bc,
+        model="SWE",
+        infiltrationRate=0.0,
+        wetdry_scheme=wetdry,
     )
     solver.landslide = HydrographSource(
         solver, g["inlet"], LIQ_T_S, LIQ_Q_M3S, min_depth_m=0.2
@@ -206,7 +216,7 @@ def run(out: Path, duration_s: float) -> None:
             fp_wet.append(float((depth[fp] > DRY_M).mean()))
             volume.append(float(np.maximum(depth[inner], 0.0).sum() * dx * dx))
             for ft in FRAME_TIMES_S:
-                if abs(t - ft) < dt and ft not in frames:
+                if t >= ft - 1e-6 and ft not in frames:  # first sample at/after ft
                     frames[ft] = np.where(depth > DRY_M, eta, np.nan).astype(np.float32)
             if step % (every * 30) == 0:
                 rate = t / max(time.perf_counter() - t0, 1e-9)
@@ -243,7 +253,8 @@ def _telemac_floodplain_wet_fraction(out: Path):
     g = dict(np.load(out / "grid.npz"))
     fp = g["floodplain"]
     ii, jj = np.nonzero(fp)
-    xq, yq = ii * float(g["dx"]), jj * float(g["dx"])
+    pad = int(g["pad"]) if "pad" in g else 0
+    xq, yq = (ii - pad) * float(g["dx"]), (jj - pad) * float(g["dx"])
     d = np.load(TELEMAC_REF / "breach_nobreach_restart.npz")
     tri = Triangulation(d["x"], d["y"], d["ikle"])
     frac = [
@@ -324,9 +335,10 @@ if __name__ == "__main__":
     ap.add_argument("stage", choices=["prep", "run", "compare"])
     ap.add_argument("--out", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--duration", type=float, default=DURATION_S)
+    ap.add_argument("--wetdry", choices=["legacy", "conserving"], default="legacy")
     a = ap.parse_args()
     {
         "prep": lambda: prep(a.out),
-        "run": lambda: run(a.out, a.duration),
+        "run": lambda: run(a.out, a.duration, a.wetdry),
         "compare": lambda: compare(a.out),
     }[a.stage]()
