@@ -682,7 +682,11 @@ class Solver:
                 ### SOLID WALLS
                 if self.bcWest <=1:
                     if i <= 1:
-                        BCState[0] = srcState[  self.BCShift - i , j ][0]
+                        BCState[0] = srcState[self.BCShift - i , j][0]
+                        if self.wd_conserving == 1 and srcState[self.BCShift - i , j][0] - self.Bottom[2, self.BCShift - i , j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = -srcState[  self.BCShift - i , j ][1]
                         BCState[2] = 0.0
                         BCState[3] = srcState[  self.BCShift - i , j ][3]
@@ -692,7 +696,11 @@ class Solver:
                         BCState_Sed = 0.0
                 if self.bcEast <= 1:
                     if (i >=self.nx - 2):
-                        BCState[0] = srcState[ self.R_x - i, j][0]
+                        BCState[0] = srcState[self.R_x - i, j][0]
+                        if self.wd_conserving == 1 and srcState[self.R_x - i, j][0] - self.Bottom[2, self.R_x - i, j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = -srcState[ self.R_x - i, j][1]
                         BCState[2] = 0.0
                         BCState[3] = srcState[ self.R_x - i, j][3]
@@ -892,7 +900,11 @@ class Solver:
                 ### SOLID WALLS
                 if self.bcWest <=1:
                     if i <= 1:
-                        BCState[0] = srcState[  self.BCShift - i , j ][0]
+                        BCState[0] = srcState[self.BCShift - i , j][0]
+                        if self.wd_conserving == 1 and srcState[self.BCShift - i , j][0] - self.Bottom[2, self.BCShift - i , j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = -srcState[  self.BCShift - i , j ][1]
                         BCState[2] = srcState[  self.BCShift - i , j ][2]
                         BCState[3] = srcState[  self.BCShift - i , j ][3]
@@ -902,7 +914,11 @@ class Solver:
                         BCState_Sed = 0.0
                 if self.bcEast <= 1:
                     if (i >=self.nx - 2):
-                        BCState[0] = srcState[ self.R_x - i, j][0]
+                        BCState[0] = srcState[self.R_x - i, j][0]
+                        if self.wd_conserving == 1 and srcState[self.R_x - i, j][0] - self.Bottom[2, self.R_x - i, j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = -srcState[ self.R_x - i, j][1]
                         BCState[2] = srcState[ self.R_x - i, j][2]
                         BCState[3] = srcState[ self.R_x - i, j][3]
@@ -913,6 +929,10 @@ class Solver:
                 if self.bcSouth <= 1:
                     if j <= 1:
                         BCState[0] = srcState[i, self.BCShift - j][0]
+                        if self.wd_conserving == 1 and srcState[i, self.BCShift - j][0] - self.Bottom[2, i, self.BCShift - j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = srcState[i, self.BCShift - j][1]
                         BCState[2] = -srcState[i, self.BCShift - j][2]
                         BCState[3] = srcState[i, self.BCShift - j][3]
@@ -922,7 +942,11 @@ class Solver:
                         BCState_Sed = 0.0
                 if self.bcNorth <=1:
                     if j>=self.ny-2:
-                        BCState[0] = srcState[ i, self.R_y - j][0]
+                        BCState[0] = srcState[i, self.R_y - j][0]
+                        if self.wd_conserving == 1 and srcState[i, self.R_y - j][0] - self.Bottom[2, i, self.R_y - j] <= self.delta:
+                            # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                            # onto a lower ghost bed would leave a phantom column there.
+                            BCState[0] = self.Bottom[2, i, j]
                         BCState[1] = srcState[ i, self.R_y - j][1]
                         BCState[2] = -srcState[ i, self.R_y - j][2]
                         BCState[3] = srcState[ i, self.R_y - j][3]
@@ -934,24 +958,40 @@ class Solver:
                 # letting the last processed wall overwrite the first one.
                 if i <= 1 and j <= 1 and self.bcWest <= 1 and self.bcSouth <= 1:
                     BCState[0] = srcState[self.BCShift - i, self.BCShift - j][0]
+                    if self.wd_conserving == 1 and srcState[self.BCShift - i, self.BCShift - j][0] - self.Bottom[2, self.BCShift - i, self.BCShift - j] <= self.delta:
+                        # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                        # onto a lower ghost bed would leave a phantom column there.
+                        BCState[0] = self.Bottom[2, i, j]
                     BCState[1] = -srcState[self.BCShift - i, self.BCShift - j][1]
                     BCState[2] = -srcState[self.BCShift - i, self.BCShift - j][2]
                     BCState[3] = srcState[self.BCShift - i, self.BCShift - j][3]
                     BCState_Sed = 0.0
                 if i <= 1 and j >= self.ny - 2 and self.bcWest <= 1 and self.bcNorth <= 1:
                     BCState[0] = srcState[self.BCShift - i, self.R_y - j][0]
+                    if self.wd_conserving == 1 and srcState[self.BCShift - i, self.R_y - j][0] - self.Bottom[2, self.BCShift - i, self.R_y - j] <= self.delta:
+                        # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                        # onto a lower ghost bed would leave a phantom column there.
+                        BCState[0] = self.Bottom[2, i, j]
                     BCState[1] = -srcState[self.BCShift - i, self.R_y - j][1]
                     BCState[2] = -srcState[self.BCShift - i, self.R_y - j][2]
                     BCState[3] = srcState[self.BCShift - i, self.R_y - j][3]
                     BCState_Sed = 0.0
                 if i >= self.nx - 2 and j <= 1 and self.bcEast <= 1 and self.bcSouth <= 1:
                     BCState[0] = srcState[self.R_x - i, self.BCShift - j][0]
+                    if self.wd_conserving == 1 and srcState[self.R_x - i, self.BCShift - j][0] - self.Bottom[2, self.R_x - i, self.BCShift - j] <= self.delta:
+                        # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                        # onto a lower ghost bed would leave a phantom column there.
+                        BCState[0] = self.Bottom[2, i, j]
                     BCState[1] = -srcState[self.R_x - i, self.BCShift - j][1]
                     BCState[2] = -srcState[self.R_x - i, self.BCShift - j][2]
                     BCState[3] = srcState[self.R_x - i, self.BCShift - j][3]
                     BCState_Sed = 0.0
                 if i >= self.nx - 2 and j >= self.ny - 2 and self.bcEast <= 1 and self.bcNorth <= 1:
                     BCState[0] = srcState[self.R_x - i, self.R_y - j][0]
+                    if self.wd_conserving == 1 and srcState[self.R_x - i, self.R_y - j][0] - self.Bottom[2, self.R_x - i, self.R_y - j] <= self.delta:
+                        # A dry mirror cell gives a dry ghost cell: mirroring its elevation
+                        # onto a lower ghost bed would leave a phantom column there.
+                        BCState[0] = self.Bottom[2, i, j]
                     BCState[1] = -srcState[self.R_x - i, self.R_y - j][1]
                     BCState[2] = -srcState[self.R_x - i, self.R_y - j][2]
                     BCState[3] = srcState[self.R_x - i, self.R_y - j][3]

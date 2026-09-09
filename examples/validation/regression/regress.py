@@ -307,6 +307,9 @@ def compare_case(*, a: Path, b: Path, tol: float) -> dict[str, object]:
     rep["volume_len"] = [len(va), len(vb)]
     for k, v in ma.items():
         if isinstance(v, (int, float)) and k in mb and not k.startswith("wall"):
+            if mb[k] is None:  # e.g. an arrival that one run never reached
+                rep["scalars"][k] = {"a": v, "b": None, "delta": None}  # type: ignore[index]
+                continue
             rep["scalars"][k] = {"a": v, "b": mb[k], "delta": float(mb[k]) - float(v)}  # type: ignore[index]
     rep["wall_s"] = {"a": ma.get("wall_loop_s"), "b": mb.get("wall_loop_s")}
     rep["max_eta_delta_m"] = worst
@@ -339,7 +342,11 @@ def compare(*, a: Path, b: Path, tol: float) -> dict[str, object]:
                 "MISSING",
             )
             continue
-        rep = compare_case(a=a / name, b=b / name, tol=tol)
+        try:
+            rep = compare_case(a=a / name, b=b / name, tol=tol)
+        except ValueError as exc:  # e.g. grids of different shape (case re-gridded)
+            logger.warning("{}: skipped, {}", name, exc)
+            continue
         out["cases"][name] = rep  # type: ignore[index]
         for fk, fr in rep["frames"].items():  # type: ignore[attr-defined]
             logger.info(
@@ -369,12 +376,12 @@ def compare(*, a: Path, b: Path, tol: float) -> dict[str, object]:
             rep["status"],
         )
         for sk, sr in rep["scalars"].items():  # type: ignore[attr-defined]
-            if abs(sr["delta"]) > 0:
+            if sr["delta"] is None or abs(sr["delta"]) > 0:
                 logger.info(
-                    "{:16s}   {:34s} {:+.4g} ({} -> {})",
+                    "{:16s}   {:34s} {} ({} -> {})",
                     name,
                     sk,
-                    sr["delta"],
+                    "n/a" if sr["delta"] is None else f"{sr['delta']:+.4g}",
                     sr["a"],
                     sr["b"],
                 )
