@@ -200,6 +200,7 @@ def plot(tag_a, tag_b) -> None:
 
 
 # -------------------------------------------------------------------------- data
+BUNDLE = "celeris_validation.tar"
 PACKS = {  # archive name: paths under the data root
     "telemac_examples": ["telemac_examples"],
     "telemac_ref": ["telemac"],
@@ -267,8 +268,13 @@ def data() -> None:
     default=Path.home() / "telemac-mascaret/examples/telemac2d",
     show_default=True,
 )
-def pack(dest, telemac_examples) -> None:
-    """Copy the needed TELEMAC example inputs into the root, then build .tar.gz archives + manifest.json."""
+@click.option(
+    "--bundle/--no-bundle",
+    default=True,
+    help="also write one celeris_validation.tar holding the archives and the manifest",
+)
+def pack(dest, telemac_examples, bundle) -> None:
+    """Copy the needed TELEMAC example inputs into the root, then build .tar.gz archives + manifest.json (+ one bundle)."""
     root = data_root()
     dest = dest or root / "pack"
     dest.mkdir(parents=True, exist_ok=True)
@@ -298,27 +304,56 @@ def pack(dest, telemac_examples) -> None:
         click.echo(f"{arc.name}: {arc.stat().st_size / 1e6:.1f} MB")
     (dest / "manifest.json").write_text(json.dumps(manifest, indent=2))
     click.secho(f"manifest: {dest / 'manifest.json'}", fg="green")
+    if bundle:
+        bundle_path = dest / BUNDLE
+        with tarfile.open(bundle_path, "w") as tf:  # archives are already gzipped
+            tf.add(dest / "manifest.json", arcname="manifest.json")
+            for meta in manifest["archives"].values():
+                tf.add(dest / meta["file"], arcname=meta["file"])
+        (dest / (BUNDLE + ".sha256")).write_text(_sha256(bundle_path) + "\n")
+        click.secho(
+            f"bundle: {bundle_path} ({bundle_path.stat().st_size / 1e6:.0f} MB), sha256 in {BUNDLE}.sha256",
+            fg="green",
+        )
 
 
 @data.command()
-@click.argument("base_url")
+@click.argument("url")
 @click.option(
-    "--only", multiple=True, help="archive names to fetch (default all in the manifest)"
+    "--only",
+    multiple=True,
+    help="archive names to extract (default all in the manifest)",
 )
-def fetch(base_url, only) -> None:
-    """Download manifest.json and the archives from BASE_URL, verify sha256, extract into the root."""
+def fetch(url, only) -> None:
+    """Restore the validation data from URL.
+
+    URL is either the single bundle (a URL with SAS query, or a local path, whose
+    name contains ``celeris_validation.tar``) or a base URL/folder that holds
+    ``manifest.json`` and the archives. Verifies sha256 and extracts into the root.
+    """
     root = data_root()
-    root.mkdir(parents=True, exist_ok=True)
-    base = base_url.rstrip("/")
-    with urllib.request.urlopen(f"{base}/manifest.json") as r:
-        manifest = json.loads(r.read())
+    pack_dir = root / "pack"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    is_bundle = BUNDLE in url.split("?")[0]
+    if is_bundle:
+        local = Path(url) if Path(url).exists() else pack_dir / BUNDLE
+        if local != Path(url):
+            click.echo(f"fetching {BUNDLE}")
+            urllib.request.urlretrieve(url, local)
+        with tarfile.open(local, "r") as tf:
+            tf.extractall(pack_dir, filter="data")
+        manifest = json.loads((pack_dir / "manifest.json").read_text())
+    else:
+        base = url.rstrip("/")
+        with urllib.request.urlopen(f"{base}/manifest.json") as r:
+            manifest = json.loads(r.read())
     for name, meta in manifest["archives"].items():
         if only and name not in only:
             continue
-        arc = root / "pack" / meta["file"]
-        arc.parent.mkdir(parents=True, exist_ok=True)
-        click.echo(f"fetching {meta['file']} ({meta['bytes'] / 1e6:.1f} MB)")
-        urllib.request.urlretrieve(f"{base}/{meta['file']}", arc)
+        arc = pack_dir / meta["file"]
+        if not is_bundle:
+            click.echo(f"fetching {meta['file']} ({meta['bytes'] / 1e6:.1f} MB)")
+            urllib.request.urlretrieve(f"{base}/{meta['file']}", arc)
         got = _sha256(arc)
         if got != meta["sha256"]:
             raise click.ClickException(
