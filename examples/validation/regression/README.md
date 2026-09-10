@@ -169,3 +169,11 @@ is meaningful again. The `legacy` baseline above was frozen with the racy code;
 `legacy_det` is the deterministic legacy baseline and `conserving` the same
 cases with `--wetdry conserving`. The breach case was padded by two wall cells
 after `legacy` was frozen, so its frames do not align with that first tag.
+
+## Update: v2 baselines (discharge boundary added, breach rim mirrored)
+
+`legacy_v2` and `conserving_v2` are frozen on the code that adds boundary type 5
+(`DischargeBoundary`); nothing in the eight cases uses it, so they must equal
+`legacy_det` and `conserving3` bitwise except `breach`, whose grid changed (the
+ghost rim now mirrors the interior instead of a 20 m wall). Legacy blows up at
+step 138 on that grid; `breach` is compared for the conserving scheme only.

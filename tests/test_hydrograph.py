@@ -306,3 +306,85 @@ def test_still_water_below_datum_stays_dry_on_land(tmp_path: Path) -> None:
     land = b > -1.5
     assert np.abs(eta - b)[land].max() < 1e-4
     assert np.abs(eta + 2.0)[~land].max() < 1e-4
+
+
+# ---------------------------------------------------------------------------
+# DischargeBoundary (type 5 edge inflow) and the series file loader.
+# ---------------------------------------------------------------------------
+
+
+def _build_river_basin(tmp_path: Path, east: int) -> tuple[Solver, Evolve]:
+    """Flat 1 m deep basin with a discharge boundary on the west edge."""
+    ti.init(arch=ti.cpu, default_fp=ti.f32)
+    xs, ys = np.linspace(0.0, 40.0, 81), np.linspace(0.0, 8.0, 17)
+    xg, yg = np.meshgrid(xs, ys)
+    np.savetxt(
+        tmp_path / "basin.xyz",
+        np.column_stack([xg.ravel(), yg.ravel(), np.ones(xg.size)]),
+    )
+    topo = Topodata(filename="basin.xyz", path=str(tmp_path), datatype="xyz")
+    bc = BoundaryConditions(
+        celeris=False, North=0, South=0, East=east, West=5, BoundaryWidth=10
+    )
+    domain = Domain(topodata=topo, x1=0.0, x2=40.0, y1=0.0, y2=8.0, Nx=160, Ny=32)
+    solver = Solver(domain=domain, boundary_conditions=bc, model="SWE")
+    return solver, Evolve(solver=solver, maxsteps=1)
+
+
+def test_read_discharge_series_telemac_style(tmp_path: Path) -> None:
+    from celeris.hydrograph import read_discharge_series
+
+    f = tmp_path / "inflow.liq"
+    f.write_text("# hydrograph\nT Q(2)\ns m3/s\n0.0 50.0\n7200.0 1000.0\n18800.0, 50.0\n")
+    t, q = read_discharge_series(str(f))
+    assert t.tolist() == [0.0, 7200.0, 18800.0]
+    assert q.tolist() == [50.0, 1000.0, 50.0]
+
+
+def test_discharge_boundary_rejects_wrong_type(tmp_path: Path) -> None:
+    from celeris.hydrograph import DischargeBoundary
+
+    solver, _ = _build_river_basin(tmp_path, east=0)
+    with pytest.raises(ValueError, match="type"):
+        DischargeBoundary(solver, "east", [0.0, 10.0], [1.0, 1.0])
+    with pytest.raises(ValueError):
+        DischargeBoundary(solver, "west", [0.0, 10.0, 5.0], [1.0, 1.0, 1.0])
+
+
+def test_discharge_boundary_closed_basin_volume(tmp_path: Path) -> None:
+    """Water entering through the west edge shows up as volume, to 3 %."""
+    from celeris.hydrograph import DischargeBoundary
+
+    solver, run = _build_river_basin(tmp_path, east=0)
+    river = DischargeBoundary(solver, "west", [0.0, 30.0], [1.0, 1.0])
+    solver.inflows.append(river)
+    run.Evolve_0()
+    v0 = _wet_volume(solver)
+    dt = float(solver.dt)
+    for i in range(round(30.0 / dt)):
+        run.Evolve_Steps(i)
+    assert np.isfinite(solver.State.to_numpy()).all()
+    assert _wet_volume(solver) - v0 == pytest.approx(river.volume_m3, rel=0.03)
+
+
+def test_discharge_boundary_channel_flux(tmp_path: Path) -> None:
+    """Steady river inflow, sponge outlet: mid-channel flux equals Q and the
+    water arrives with velocity, no inlet hump (surface within 2 cm of flat)."""
+    from celeris.hydrograph import DischargeBoundary
+
+    q_in = 0.5
+    solver, run = _build_river_basin(tmp_path, east=1)
+    solver.inflows.append(DischargeBoundary(solver, "west", [0.0, 400.0], [q_in, q_in]))
+    run.Evolve_0()
+    dt = float(solver.dt)
+    i_mid = solver.nx // 2
+    flux = []
+    for i in range(int(300.0 / dt)):
+        run.Evolve_Steps(i)
+        if i * dt > 200.0 and i % 20 == 0:
+            st = solver.State.to_numpy()
+            flux.append(float(st[i_mid, :, 1].sum() * solver.dy))
+    eta = _eta(solver)[INNER]
+    assert np.isfinite(solver.State.to_numpy()).all()
+    assert np.mean(flux) == pytest.approx(q_in, rel=0.15)
+    assert eta[:8].mean() - eta[-8:].mean() < 0.02  # no hump at the inlet

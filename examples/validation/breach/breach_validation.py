@@ -87,6 +87,15 @@ def prep(out: Path) -> None:
     hu = np.where(depth > 0, hu.filled(0.0), 0.0)
     hv = np.where(depth > 0, hv.filled(0.0), 0.0)
     inlet = (xg >= INLET_X_M[0]) & (xg < INLET_X_M[1]) & (depth > 0.3)
+    # The ghost rim mirrors the adjacent interior cells on all four edges: the
+    # wall condition is the reflection itself, and a tall pad next to the cells
+    # would trigger the solver's steep-slope Froude cap in the adjacent rows.
+    for arr in (bed, depth, hu, hv):
+        arr[:PAD, :] = arr[PAD, :]
+        arr[nx - PAD :, :] = arr[nx - PAD - 1, :]
+        arr[:, :PAD] = arr[:, PAD][:, None]
+        arr[:, ny - PAD :] = arr[:, ny - PAD - 1][:, None]
+    eta = bed + depth
     outlet = np.zeros_like(inlet)
     outlet[nx - PAD - OUTLET_COLS : nx - PAD, :] = True
     outlet &= inside & (bed < 6.0)  # channel section only
@@ -121,11 +130,13 @@ def prep(out: Path) -> None:
     )
 
 
-def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
+def run(
+    out: Path, duration_s: float, wetdry: str = "legacy", inflow: str = "source"
+) -> None:
     import taichi as ti
 
     from celeris.domain import BoundaryConditions, Domain, Topodata
-    from celeris.hydrograph import HydrographSource
+    from celeris.hydrograph import DischargeBoundary, HydrographSource
     from celeris.runner import Evolve
     from celeris.solver import Solver
 
@@ -140,7 +151,9 @@ def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
     )
     ti.init(arch=ti.cuda, default_fp=ti.f32)
     topo = Topodata(filename="bathy.xyz", path=str(out), datatype="xyz")
-    bc = BoundaryConditions(celeris=False, North=0, East=0, South=0, West=0)
+    bc = BoundaryConditions(
+        celeris=False, North=0, East=0, South=0, West=5 if inflow == "boundary" else 0
+    )
     dom = Domain(
         topodata=topo,
         x1=0.0,
@@ -160,9 +173,10 @@ def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
         infiltrationRate=0.0,
         wetdry_scheme=wetdry,
     )
-    solver.landslide = HydrographSource(
-        solver, g["inlet"], LIQ_T_S, LIQ_Q_M3S, min_depth_m=0.2
-    )
+    if inflow == "source":
+        solver.landslide = HydrographSource(
+            solver, g["inlet"], LIQ_T_S, LIQ_Q_M3S, min_depth_m=0.2
+        )
     evolve = Evolve(solver=solver, maxsteps=1)
     # Initial state must be written before Evolve_0's wet check runs.
     state = np.zeros((nx, ny, 4), dtype=np.float32)
@@ -178,6 +192,8 @@ def run(out: Path, duration_s: float, wetdry: str = "legacy") -> None:
     ):
         f.from_numpy(state)
     solver.InitStates = lambda: None  # keep Evolve_0 from zeroing the state again
+    if inflow == "boundary":
+        solver.inflows.append(DischargeBoundary(solver, "west", LIQ_T_S, LIQ_Q_M3S))
     evolve.Evolve_0()
 
     outlet = ti.field(ti.i32, shape=(nx, ny))
@@ -286,13 +302,13 @@ def compare(out: Path) -> None:
         ):
             d = cel[sel] - tel[sel]
             rows.append(
-                dict(
-                    probe_x_m=px,
-                    window=label,
-                    rmse_m=float(np.sqrt(np.mean(d**2))),
-                    max_abs_m=float(np.abs(d).max()),
-                    bias_m=float(d.mean()),
-                )
+                {
+                    "probe_x_m": px,
+                    "window": label,
+                    "rmse_m": float(np.sqrt(np.mean(d**2))),
+                    "max_abs_m": float(np.abs(d).max()),
+                    "bias_m": float(d.mean()),
+                }
             )
         ax.plot(t_ref, tel, "k-", label="TELEMAC-2D")
         ax.plot(t_ref, cel, "C0--", label="Celeris")
@@ -336,9 +352,15 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--duration", type=float, default=DURATION_S)
     ap.add_argument("--wetdry", choices=["legacy", "conserving"], default="legacy")
+    ap.add_argument(
+        "--inflow",
+        choices=["source", "boundary"],
+        default="source",
+        help="hydrograph as interior source (GLOF) or west discharge boundary (river)",
+    )
     a = ap.parse_args()
     {
         "prep": lambda: prep(a.out),
-        "run": lambda: run(a.out, a.duration, a.wetdry),
+        "run": lambda: run(a.out, a.duration, a.wetdry, a.inflow),
         "compare": lambda: compare(a.out),
     }[a.stage]()

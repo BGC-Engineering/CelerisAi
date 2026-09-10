@@ -234,6 +234,12 @@ class Solver:
         # (see celeris/landslide.py); zero unless a slide is attached.
         self.LandslideDhdt = self.domain.states_one()
         self.landslide = None
+        # Discharge (hydrograph) boundaries, type 5: total discharge Q(t) and the
+        # wet cross-section area of the first interior row/column per side
+        # [west, east, south, north]; filled each step by DischargeBoundary.update.
+        self.InflowQ = ti.field(self.precision, shape=(4,))
+        self.InflowArea = ti.field(self.precision, shape=(4,))
+        self.inflows = []
         # Wet/dry treatment. 'legacy' reproduces upstream CelerisAi bit for bit.
         # 'conserving': a dry cell carries no face depth (no phantom water), a wet
         # surface standing above a dry neighbour's bed drives a flux into it
@@ -954,6 +960,43 @@ class Solver:
                     elif j==self.ny-3:
                         BCState[2] = 0.0
                         BCState_Sed = 0.0
+                ### DISCHARGE (HYDROGRAPH) BOUNDARIES, type 5
+                # Ghost cells copy the interior surface and carry hu = h * Q / A, i.e.
+                # a velocity uniform over the wet section (TELEMAC's default profile),
+                # so the water enters with the velocity of the imposed discharge. The
+                # ghost cells on such an edge must carry the channel bed, not a wall.
+                if self.bcWest == 5 and i <= 1:
+                    eta_m = srcState[self.BCShift - i, j][0]
+                    h_m = ti.max(eta_m - self.Bottom[2, self.BCShift - i, j], 0.0)
+                    hu_in = 0.0
+                    if h_m > self.delta and self.InflowArea[0] > 0.0:
+                        hu_in = h_m * self.InflowQ[0] / self.InflowArea[0]
+                    BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.BCShift - i, j][3]], self.precision)
+                    BCState_Sed = 0.0
+                if self.bcEast == 5 and i >= self.nx - 2:
+                    eta_m = srcState[self.R_x - i, j][0]
+                    h_m = ti.max(eta_m - self.Bottom[2, self.R_x - i, j], 0.0)
+                    hu_in = 0.0
+                    if h_m > self.delta and self.InflowArea[1] > 0.0:
+                        hu_in = -h_m * self.InflowQ[1] / self.InflowArea[1]
+                    BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.R_x - i, j][3]], self.precision)
+                    BCState_Sed = 0.0
+                if self.bcSouth == 5 and j <= 1:
+                    eta_m = srcState[i, self.BCShift - j][0]
+                    h_m = ti.max(eta_m - self.Bottom[2, i, self.BCShift - j], 0.0)
+                    hv_in = 0.0
+                    if h_m > self.delta and self.InflowArea[2] > 0.0:
+                        hv_in = h_m * self.InflowQ[2] / self.InflowArea[2]
+                    BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.BCShift - j][3]], self.precision)
+                    BCState_Sed = 0.0
+                if self.bcNorth == 5 and j >= self.ny - 2:
+                    eta_m = srcState[i, self.R_y - j][0]
+                    h_m = ti.max(eta_m - self.Bottom[2, i, self.R_y - j], 0.0)
+                    hv_in = 0.0
+                    if h_m > self.delta and self.InflowArea[3] > 0.0:
+                        hv_in = -h_m * self.InflowQ[3] / self.InflowArea[3]
+                    BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.R_y - j][3]], self.precision)
+                    BCState_Sed = 0.0
                 # Resolve corner cells with a true double reflection instead of
                 # letting the last processed wall overwrite the first one.
                 if i <= 1 and j <= 1 and self.bcWest <= 1 and self.bcSouth <= 1:
@@ -1208,6 +1251,25 @@ class Solver:
                 txState[i,j] = BCState
                 self.NewState_Sed[i,j].x = BCState_Sed
 
+
+    @ti.kernel
+    def inflow_section_area(self, side: ti.i32) -> ti.f32:
+        """Wet cross-section area (m^2) of the first interior column/row on ``side``
+        (0 west, 1 east, 2 south, 3 north), used by DischargeBoundary."""
+        area = 0.0
+        if side == 0 or side == 1:
+            i = 2
+            if side == 1:
+                i = self.nx - 3
+            for j in range(2, self.ny - 2):
+                area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dy
+        else:
+            j = 2
+            if side == 3:
+                j = self.ny - 3
+            for i in range(2, self.nx - 2):
+                area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dx
+        return area
 
     @ti.kernel
     def copy_states(self,src: ti.template(), dst: ti.template()):

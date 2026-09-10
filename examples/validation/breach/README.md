@@ -19,9 +19,9 @@ free surface is prescribed (0.87 to 2.49 m). Initial state: developed flow at
 
 | item | choice |
 |---|---|
-| grid | 2.5 m, 2004 x 204 cells (TELEMAC domain plus a 2-cell wall pad so the ghost rim holds no physical cell), bed and initial depth/momentum linearly interpolated on the TELEMAC triangulation; outside the mesh hull = 20 m wall |
+| grid | 2.5 m, 2004 x 204 cells: TELEMAC domain plus a 2-cell ghost rim that mirrors the adjacent interior cells (bed, depth, momentum), so the rim holds no physical cell and no artificial step; bed and initial depth/momentum linearly interpolated on the TELEMAC triangulation; outside the mesh hull = 20 m wall |
 | datum | 4.9 m a.s.l., just below the lowest floodplain cell (see finding 1) |
-| inflow | `HydrographSource` on the wet cells of the strip 10 <= x < 30 m, Q(t) from `t2d_breach.liq` |
+| inflow | `--inflow source` (default): `HydrographSource` on the wet cells of the strip 10 <= x < 30 m; `--inflow boundary`: `DischargeBoundary` on the west edge (boundary type 5), the like-for-like twin of TELEMAC's prescribed flowrate. Q(t) from `t2d_breach.liq` in both |
 | outlet | free surface from the `.liq` imposed on 5 columns inside the ghost rim (post-step kernel), momentum kept |
 | friction | Manning n = 1/15 (`isManning=1`) |
 | model | SWE, Courant 0.2, `infiltrationRate=0`, no breaking model |
@@ -112,3 +112,27 @@ Keep probes at least ~1 km from a channel inlet, or inject into a lake.
 Interpolate nodal depth and momentum onto the grid, never the free surface:
 dry nodes carry eta = bed and interpolating eta across a wet/dry bank perches
 spurious water on the slope.
+
+## Inflow types and the ghost rim (later addition)
+
+The case now runs with either hydrograph mechanism. Conserving scheme, full
+2700 s, Celeris minus TELEMAC at the probes:
+
+| x (m) | source, 20 m wall pads (earlier) | source, mirrored pads | discharge boundary, mirrored pads |
+|---|---|---|---|
+| 500 | RMSE 0.06, bias +0.03 | 0.14, +0.12 | 0.09, +0.06 |
+| 1000 | 0.05, +0.02 | 0.13, +0.09 | 0.08, +0.04 |
+| 1900 | 0.06, +0.00 | 0.10, +0.04 | 0.08, +0.01 |
+| 3100 | 0.08, -0.00 | 0.10, +0.00 | 0.10, -0.02 |
+| 4500 | 0.09, -0.04 | 0.10, -0.05 | 0.12, -0.06 |
+| floodplain wet area at 2700 s (TELEMAC 26 %) | 42 % | 48 % | 45 % |
+
+The rim was changed from a 20 m wall to a mirror of the interior after the
+`bump` case showed that a tall pad next to small cells triggers the solver's
+steep-slope Froude cap in the adjacent rows (see `../bump/README.md`). On this
+2.5 m grid the pad step was 5 cells high, so the cap did not bite, and the
+mirrored rim costs 4 to 8 cm of extra upstream level for both inflow types; the
+cause was not traced. The discharge boundary removes the inlet hump the source
+made (bias at x = 500 m halves) and reproduces TELEMAC's own inflow condition.
+Legacy blows up within 10 s on the mirrored-pad grid (it ran to 2628 s on the
+wall-pad grid), so this case is a conserving-scheme case in the regression set.

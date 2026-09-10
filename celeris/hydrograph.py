@@ -1,4 +1,9 @@
-"""Prescribed inflow hydrograph as a continuity source.
+"""Prescribed inflow hydrographs: an interior source and a discharge boundary.
+
+``HydrographSource`` (interior, GLOF-style, mass at ambient velocity) and
+``DischargeBoundary`` (edge inflow, river-style, water enters with the velocity
+of the imposed discharge) both take a ``Q(t)`` series, e.g. from
+:func:`read_discharge_series`.
 
 A discharge series ``Q(t)`` is injected over a patch of wet cells through the
 same ``LandslideDhdt`` continuity source that the moving-body slide uses
@@ -124,3 +129,77 @@ class HydrographSource:
         if not self._cleared:
             self._apply(0.0)
             self._cleared = True
+
+
+def read_discharge_series(path: "str") -> "tuple[np.ndarray, np.ndarray]":
+    """Read a two-column ``time_s  discharge_m3s`` text file (TELEMAC liquid-boundary
+    style: ``#`` comments and any non-numeric header lines are skipped)."""
+    rows = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.replace(",", " ").split()
+            if len(parts) < 2:
+                continue
+            try:
+                rows.append((float(parts[0]), float(parts[1])))
+            except ValueError:
+                continue
+    if len(rows) < 2:
+        raise ValueError(f"{path}: need at least two numeric rows of time, discharge")
+    arr = np.asarray(rows, dtype=np.float64)
+    return arr[:, 0], arr[:, 1]
+
+
+class DischargeBoundary:
+    """Impose a discharge time series ``Q(t)`` through one domain edge (a river).
+
+    Requires ``BoundaryConditions(<side>=5)``. Each step the runner calls
+    :meth:`update`, which stores ``Q(t)`` and the wet cross-section area of the
+    first interior row/column; the boundary kernel then gives the two ghost
+    cells the interior surface and ``hu = h * Q / A`` (velocity uniform over the
+    wet section, as TELEMAC's default profile). The ghost cells on that edge
+    must carry the channel bed, not a wall.
+
+    Args:
+        solver: A ``celeris.solver.Solver`` built with the edge set to type 5.
+        side: ``"west" | "east" | "south" | "north"``.
+        times_s: Strictly increasing sample times (s), length >= 2.
+        discharge_m3s: Total discharge through the edge (m^3/s); positive is inflow.
+            Linear interpolation, zero outside the sampled interval.
+    """
+
+    SIDES = {"west": 0, "east": 1, "south": 2, "north": 3}
+
+    def __init__(
+        self,
+        solver: "Solver",
+        side: str,
+        times_s: "np.ndarray",
+        discharge_m3s: "np.ndarray",
+    ) -> None:
+        if side not in self.SIDES:
+            raise ValueError(f"side must be one of {list(self.SIDES)}, got {side!r}")
+        bc_type = {"west": solver.bcWest, "east": solver.bcEast, "south": solver.bcSouth, "north": solver.bcNorth}[side]
+        if int(bc_type) != 5:
+            raise ValueError(f"{side} boundary is type {bc_type}; DischargeBoundary needs type 5")
+        t = np.asarray(times_s, dtype=np.float64)
+        q = np.asarray(discharge_m3s, dtype=np.float64)
+        if t.ndim != 1 or t.shape != q.shape or t.size < 2 or np.any(np.diff(t) <= 0.0):
+            raise ValueError("times_s must be strictly increasing and match discharge_m3s")
+        self.solver = solver
+        self.side = self.SIDES[side]
+        self.times_s = t
+        self.discharge_m3s = q
+
+    @property
+    def volume_m3(self) -> float:
+        """Total volume of the series (trapezoidal integral of Q)."""
+        return float(_trapezoid(self.discharge_m3s, self.times_s))
+
+    def discharge_at(self, t: float) -> float:
+        return float(np.interp(t, self.times_s, self.discharge_m3s, left=0.0, right=0.0))
+
+    def update(self, t: float) -> None:
+        """Store ``Q(t)`` and the current wet section area for the boundary kernel."""
+        self.solver.InflowQ[self.side] = self.discharge_at(t)
+        self.solver.InflowArea[self.side] = float(self.solver.inflow_section_area(self.side))
