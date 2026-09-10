@@ -56,14 +56,24 @@ TELEMAC, for both wet/dry schemes of the fork (`Solver(wetdry_scheme=...)`):
 | dyke first overtopped | 2090 s | never | 2021 s |
 | floodplain wet area at 2400 s | 8 % | 0 % | 16 % |
 | floodplain wet area at 2700 s | 26 % | 0 % | 42 % |
+| floodplain volume at 2400 s (weir law: 20,600 m3) | 9,000 m3 | 0 | 27,900 m3 |
 | run | | blows up at 2628 s | stable |
 
 With the conserving scheme the two models agree to within 5 to 9 cm RMSE at
-every probe and the channel discharge Q(x) matches within 3 m3/s. Celeris
-floods the plain earlier and wider than TELEMAC once the dyke is overtopped;
-the sill rule (a wet surface above a dry cell's bed drives a dam-break flux
-capped at the wet depth) is more permissive than TELEMAC's finite-element
-wetting. Not tuned.
+every probe and the channel discharge Q(x) matches within 3 m3/s.
+
+**Overtopping volume.** Celeris floods the plain earlier and wider than TELEMAC
+(16 % vs 8 % of the area at 2400 s, 27,900 vs 9,000 m3). The crest elevations
+of the two grids are identical to 1 cm and the channel level beside the dyke
+agrees to 1 cm (8.26 vs 8.27 m at x = 2100 m, 2400 s), so the difference is the
+discharge over the crest at the same head. Integrating the broad-crested weir
+law q = (2/3)^1.5 sqrt(g) H^1.5 along the dyke with TELEMAC's own channel
+levels gives 20,600 m3 by 2400 s and 82,000 m3 by 2700 s: Celeris is 35 % above
+the weir value, TELEMAC 55 % below it (41,000 m3 at 2700 s). Neither is
+validated against a measurement here; the ideal weir sits between them, nearer
+Celeris. Scaling the first-wetting flux by the head-based wave speed changed
+the Celeris volume by 0.3 %, so the excess comes from the shallow-water flow over
+the wet crest on 2.5 m cells, not from the wet/dry rule.
 
 The legacy scheme on this padded grid is worse than on the unpadded grid of
 the first version of this case (bias 0.15 to 0.4 m): the bank cells are now
