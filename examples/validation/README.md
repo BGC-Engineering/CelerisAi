@@ -22,7 +22,7 @@ uv run python examples/validation/cli.py regress freeze --tag <new_tag> --wetdry
 # data: everything large lives under the data root, not in git
 export CELERIS_VALIDATION_DATA=/path/to/root          # default /mnt/d/Homathko/Validation
 uv run python examples/validation/cli.py data pack     # -> <root>/pack/celeris_validation.tar (one file to upload) + the archives and manifest
-uv run python examples/validation/cli.py data fetch "https://<account>.blob.core.windows.net/<container>/celeris_validation.tar?<sas>"
+uv run python examples/validation/cli.py data fetch "https://sadsdev.blob.core.windows.net/celeris/celeris_validation.tar?<sas>"   # ask the project lead for a read SAS
 uv run python examples/validation/cli.py data verify
 ```
 
