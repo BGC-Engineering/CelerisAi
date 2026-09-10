@@ -150,7 +150,10 @@ def run(
     jm = ny // 2
     eta = st[:, jm, 0] + DATUM_M
     depth = eta - bed[:, jm]
-    hu = st[:, jm, 1]
+    # section unit discharge: rows inside the walls, wall rows (2, ny-3) at half weight
+    w = np.ones(ny - 2 * PAD)
+    w[0] = w[-1] = 0.5
+    hu = (st[:, PAD : ny - PAD, 1] * w).sum(axis=1) / (ny - 2 * PAD - 1)
     return {
         "x": xc,
         "bed": bed[:, jm],
@@ -315,7 +318,7 @@ def main() -> None:
         ax_h.set_ylabel("Elevation (m)")
         ax_h.legend(fontsize=8)
         ax_h.grid(alpha=0.3)
-        ax_q.set_title(f"{title}: Unit Discharge")
+        ax_q.set_title(f"{title}: Section-Mean Unit Discharge")
         ax_q.set_ylabel("q (m2/s)")
         ax_q.legend(fontsize=8)
         ax_q.grid(alpha=0.3)

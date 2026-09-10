@@ -969,32 +969,40 @@ class Solver:
                     eta_m = srcState[self.BCShift - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.BCShift - i, j], 0.0)
                     hu_in = 0.0
-                    if h_m > self.delta and self.InflowArea[0] > 0.0 and j >= 3 and j <= self.ny - 4:
+                    if h_m > self.delta and self.InflowArea[0] > 0.0:
                         hu_in = h_m * self.InflowQ[0] / self.InflowArea[0]
+                        if j == 2 or j == self.ny - 3:
+                            hu_in *= 0.5  # wall cell: half of it lies in the mirror image
                     BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.BCShift - i, j][3]], self.precision)
                     BCState_Sed = 0.0
                 if self.bcEast == 5 and i >= self.nx - 2:
                     eta_m = srcState[self.R_x - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.R_x - i, j], 0.0)
                     hu_in = 0.0
-                    if h_m > self.delta and self.InflowArea[1] > 0.0 and j >= 3 and j <= self.ny - 4:
+                    if h_m > self.delta and self.InflowArea[1] > 0.0:
                         hu_in = -h_m * self.InflowQ[1] / self.InflowArea[1]
+                        if j == 2 or j == self.ny - 3:
+                            hu_in *= 0.5  # wall cell: half of it lies in the mirror image
                     BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.R_x - i, j][3]], self.precision)
                     BCState_Sed = 0.0
                 if self.bcSouth == 5 and j <= 1:
                     eta_m = srcState[i, self.BCShift - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.BCShift - j], 0.0)
                     hv_in = 0.0
-                    if h_m > self.delta and self.InflowArea[2] > 0.0 and i >= 3 and i <= self.nx - 4:
+                    if h_m > self.delta and self.InflowArea[2] > 0.0:
                         hv_in = h_m * self.InflowQ[2] / self.InflowArea[2]
+                        if i == 2 or i == self.nx - 3:
+                            hv_in *= 0.5  # wall cell: half of it lies in the mirror image
                     BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.BCShift - j][3]], self.precision)
                     BCState_Sed = 0.0
                 if self.bcNorth == 5 and j >= self.ny - 2:
                     eta_m = srcState[i, self.R_y - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.R_y - j], 0.0)
                     hv_in = 0.0
-                    if h_m > self.delta and self.InflowArea[3] > 0.0 and i >= 3 and i <= self.nx - 4:
+                    if h_m > self.delta and self.InflowArea[3] > 0.0:
                         hv_in = -h_m * self.InflowQ[3] / self.InflowArea[3]
+                        if i == 2 or i == self.nx - 3:
+                            hv_in *= 0.5  # wall cell: half of it lies in the mirror image
                     BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.R_y - j][3]], self.precision)
                     BCState_Sed = 0.0
                 # Resolve corner cells with a true double reflection instead of
@@ -1261,14 +1269,20 @@ class Solver:
             i = 2
             if side == 1:
                 i = self.nx - 3
-            for j in range(3, self.ny - 3):  # wall rows 2 and ny-3 carry no inflow
-                area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dy
+            for j in range(2, self.ny - 2):
+                w = 1.0
+                if j == 2 or j == self.ny - 3:
+                    w = 0.5  # the wall passes through the centre of these cells
+                area += w * ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dy
         else:
             j = 2
             if side == 3:
                 j = self.ny - 3
-            for i in range(3, self.nx - 3):  # wall columns 2 and nx-3 carry no inflow
-                area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dx
+            for i in range(2, self.nx - 2):
+                w = 1.0
+                if i == 2 or i == self.nx - 3:
+                    w = 0.5
+                area += w * ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dx
         return area
 
     @ti.kernel

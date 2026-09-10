@@ -120,19 +120,21 @@ The case now runs with either hydrograph mechanism. Conserving scheme, full
 
 | x (m) | source, 20 m wall pads (earlier) | source, mirrored pads | discharge boundary, mirrored pads |
 |---|---|---|---|
-| 500 | RMSE 0.06, bias +0.03 | 0.14, +0.12 | 0.09, +0.06 |
-| 1000 | 0.05, +0.02 | 0.13, +0.09 | 0.08, +0.04 |
-| 1900 | 0.06, +0.00 | 0.10, +0.04 | 0.08, +0.01 |
-| 3100 | 0.08, -0.00 | 0.10, +0.00 | 0.10, -0.02 |
-| 4500 | 0.09, -0.04 | 0.10, -0.05 | 0.12, -0.06 |
-| floodplain wet area at 2700 s (TELEMAC 26 %) | 42 % | 48 % | 45 % |
+| 500 | RMSE 0.06, bias +0.03 | 0.14, +0.12 | 0.11, +0.09 |
+| 1000 | 0.05, +0.02 | 0.13, +0.09 | 0.10, +0.07 |
+| 1900 | 0.06, +0.00 | 0.10, +0.04 | 0.09, +0.02 |
+| 3100 | 0.08, -0.00 | 0.10, +0.00 | 0.10, -0.01 |
+| 4500 | 0.09, -0.04 | 0.10, -0.05 | 0.11, -0.06 |
+| floodplain wet area at 2700 s (TELEMAC 26 %) | 42 % | 48 % | 46 % |
 
 The rim was changed from a 20 m wall to a mirror of the interior after the
 `bump` case showed that a tall pad next to small cells triggers the solver's
 steep-slope Froude cap in the adjacent rows (see `../bump/README.md`). On this
 2.5 m grid the pad step was 5 cells high, so the cap did not bite, and the
 mirrored rim costs 4 to 8 cm of extra upstream level for both inflow types; the
-cause was not traced. The discharge boundary removes the inlet hump the source
-made (bias at x = 500 m halves) and reproduces TELEMAC's own inflow condition.
+cause was not traced, and the upstream level is also sensitive to how the
+inflow is split across the section (a 6 cm swing between excluding the wall
+rows and weighting them by one half). The discharge boundary reproduces
+TELEMAC's own inflow condition and trims the inlet hump of the source.
 Legacy blows up within 10 s on the mirrored-pad grid (it ran to 2628 s on the
 wall-pad grid), so this case is a conserving-scheme case in the regression set.

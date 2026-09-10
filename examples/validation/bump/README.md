@@ -30,36 +30,37 @@ source has no inlet hump).
 
 ## Results, discharge boundary (`results/bump_profiles_boundary*.png`)
 
-| case | crest depth (m) | depth at x = 2 m | unit discharge upstream | L1 depth error |
+| case | crest depth (m) | depth at x = 2 m | section-mean unit discharge | L1 depth error |
 |---|---|---|---|---|
 | exact, transcritical | 0.1728 (critical) | 0.497 | 0.225 | 0 |
 | TELEMAC HLLC, 0.25 m mesh | 0.180 | 0.497 | 0.225 | 0.0046 |
-| Celeris, dx 0.05 m | 0.1727 | 0.499 | 0.225 | 0.0042 |
-| Celeris, dx 0.25 m | 0.171 | 0.495 | 0.225 | 0.0044 |
-| Celeris, dx 0.5 m (bump on 4 cells) | 0.166 | 0.485 | 0.225 | 0.014 |
+| Celeris, dx 0.05 m | 0.174 | 0.501 | 0.228 | 0.0043 |
+| Celeris, dx 0.25 m (earlier inflow split) | 0.171 | 0.495 | 0.225 | 0.0044 |
+| Celeris, dx 0.5 m, bump on 4 cells (earlier inflow split) | 0.166 | 0.485 | 0.225 | 0.014 |
 | exact, subcritical | 0.471 | 0.809 | 0.75 | 0 |
 | TELEMAC HLLC | 0.473 | 0.809 | 0.750 | 0.0074 |
-| Celeris, dx 0.05 m | 0.471 | 0.806 | 0.750 | 0.0066 |
+| Celeris, dx 0.05 m | 0.465 | 0.806 | 0.760 | 0.0062 |
 
 Legacy and conserving schemes give identical results here (no dry cell). The
 crest passes the imposed discharge at the exact head down to a bump resolved by
-four cells; the shock position is within one TELEMAC element.
+four cells; the shock position is within one TELEMAC element. The discharge
+boundary spreads the inflow with a velocity uniform over the wet section, wall
+rows at half weight (see rule 2 below), which is TELEMAC's profile option 1.
 
 ## Results, interior source (`results/bump_profiles_source.png`)
 
 | case | crest depth (m) | depth at x = 2 m | unit discharge upstream | L1 depth error |
 |---|---|---|---|---|
 | TELEMAC HLLC, 8 sources at x = 1 m, transcritical | 0.180 | 0.497 | 0.224 | 0.0048 |
-| Celeris `HydrographSource`, strip at x = 1 m, dx 0.05 m | 0.176 | 0.503 | 0.230 (centreline) | 0.0054 |
+| Celeris `HydrographSource`, strip at x = 1 m, dx 0.05 m | 0.176 | 0.503 | 0.231 | 0.0054 |
 | TELEMAC HLLC, subcritical | 0.473 | 0.807 | 0.745 | 0.0078 |
-| Celeris `HydrographSource`, subcritical | 0.460 | 0.806 | 0.768 (centreline) | 0.0059 |
+| Celeris `HydrographSource`, subcritical | 0.460 | 0.806 | 0.769 | 0.0059 |
 
 The interior source reproduces the exact solution to the same accuracy as
 TELEMAC's sources do, with no inlet hump in a 20 m channel once the strip sits
-clear of the wall column. The centreline unit discharge reads 2.4 % above the
-imposed mean because Celeris' wall passes through the centre of the first
-interior row (that row counts half) and the centreline carries slightly more
-than the section mean; the section-integrated discharge is the imposed one.
+clear of the wall column. The section-mean unit discharge (wall rows at half
+weight) reads 1 to 3 % above the imposed value in both inflow modes; the
+discrete section weights of the wall rows account for most of it.
 
 ## Two setup rules this case taught
 
