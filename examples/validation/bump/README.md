@@ -67,3 +67,15 @@ solution to the same accuracy as TELEMAC's sources do, with no inlet hump in a
    pad must not be a step.
 2. **Keep an interior source clear of the first interior column.** A strip
    touching the wall column leaked 25 % of its volume into the ghost rim.
+
+## Limiter parameter `theta` (`--theta`, default 2 as in Celeris)
+
+Behind the hydraulic jump the default `theta = 2` (least dissipative end of the
+generalized minmod limiter) is unsteady: the unit discharge at x = 15 m
+oscillates in time with a standard deviation of 0.046 m2/s (20 % of q) while the
+surface moves 2 mm. `theta = 1` (TVD minmod) removes the oscillation
+(0.005 m2/s) but leaves q 8 % high behind the jump (TELEMAC HLLC: 1.5 % high)
+and is visibly more diffusive on smooth flow: subcritical L1 0.021 m against
+0.007 m with `theta = 2`, crest depth 0.497 m against the exact 0.471 m. Neither
+value is right for both; the reservoir problem has no hydraulic jump, so the
+default stays. Legacy and conserving are identical for every `theta` here.

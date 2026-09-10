@@ -41,7 +41,12 @@ def bed_fn(x: np.ndarray) -> np.ndarray:
 
 
 def run(
-    regime: str, wetdry: str, duration_s: float, out: Path, inflow: str = "boundary"
+    regime: str,
+    wetdry: str,
+    duration_s: float,
+    out: Path,
+    inflow: str = "boundary",
+    theta: float = 2.0,
 ) -> dict[str, np.ndarray]:
     import taichi as ti
 
@@ -93,6 +98,7 @@ def run(
         model="SWE",
         infiltrationRate=0.0,
         wetdry_scheme=wetdry,
+        theta=theta,  # 2 (Celeris default) oscillates behind a hydraulic jump; 1 is TVD
     )
     evolve = Evolve(solver=solver, maxsteps=1)
     state = np.zeros((nx, ny, 4), dtype=np.float32)
@@ -199,6 +205,13 @@ def main() -> None:
     ap.add_argument("--duration", type=float, default=400.0)
     ap.add_argument("--dx", type=float, default=0.05)
     ap.add_argument("--inflow", choices=["boundary", "source"], default="boundary")
+    ap.add_argument(
+        "--theta",
+        type=float,
+        nargs="+",
+        default=[2.0],
+        help="limiter parameter(s), one run per value",
+    )
     ap.add_argument("--tag", default="")
     ap.add_argument(
         "--out", type=Path, default=Path("/mnt/d/Homathko/Validation/celeris/bump")
@@ -253,13 +266,16 @@ def main() -> None:
                     "q_exact": q_total / W_M,
                 }
             )
-        for wd, c in zip(a.wetdry, ("C3", "C0")):
+        styles = iter([("C3", "--"), ("C0", ":"), ("C2", "-."), ("C1", (0, (5, 1)))])
+        for th, wd in [(th, wd) for th in a.theta for wd in a.wetdry]:
+            c, ls = next(styles)
             res = run(
                 regime,
                 wd,
                 a.duration,
-                a.out / f"{regime}_{wd}_{a.inflow}_dx{a.dx:g}",
+                a.out / f"{regime}_{wd}_{a.inflow}_dx{a.dx:g}_th{th:g}",
                 a.inflow,
+                th,
             )
             x, ins = res["x"], res["inside"]
             h_ex = np.interp(x, sol.x, sol.H)
@@ -269,7 +285,7 @@ def main() -> None:
             rows.append(
                 {
                     "regime": regime,
-                    "model": f"Celeris {wd}",
+                    "model": f"Celeris {wd} theta={th:g}",
                     "L1_depth_m": l1,
                     "crest_depth_m": float(np.interp(10.0, x[ins], res["depth"][ins])),
                     "upstream_depth_x2_m": float(
@@ -280,16 +296,16 @@ def main() -> None:
                     "q_exact": q_total / W_M,
                 }
             )
+            lab = f"Celeris {wd.capitalize()}, Theta = {th:g}"
             ax_h.plot(
                 x[ins],
                 res["eta"][ins],
-                "--",
+                ls=ls,
                 color=c,
-                label=f"Celeris {wd.capitalize()} (L1 {l1:.3f} m)",
+                lw=1.6,
+                label=f"{lab} (L1 {l1:.3f} m)",
             )
-            ax_q.plot(
-                x[ins], res["q"][ins], "--", color=c, label=f"Celeris {wd.capitalize()}"
-            )
+            ax_q.plot(x[ins], res["q"][ins], ls=ls, color=c, lw=1.6, label=lab)
         title = {
             "trans": "Transcritical (Q = 0.45 m3/s, Outlet 0.35 m)",
             "sub": "Subcritical (Q = 1.5 m3/s, Outlet 0.8 m)",
