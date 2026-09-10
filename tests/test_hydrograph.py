@@ -60,14 +60,31 @@ INNER = (slice(2, -2), slice(2, -2))  # BoundaryPass owns a 2-cell ghost rim
 
 
 def _wet_volume(solver: Solver) -> float:
-    """Water volume over the interior; the ghost rim mirrors it and must not count."""
-    depth = np.maximum(_eta(solver) - _bed(solver), 0.0)[INNER]
-    return float(depth.sum() * solver.dx * solver.dy)
+    """Water volume inside the walls.
+
+    The ghost rim (two cells) mirrors the interior and must not count, and the
+    solid wall passes through the CENTRE of the first interior cell (index 2 and
+    n-3), so those cells count half. With this accounting the scheme conserves
+    volume to 1e-4 (checked on a disk source in a closed basin).
+    """
+    depth = np.maximum(_eta(solver) - _bed(solver), 0.0)
+    w = np.ones_like(depth)
+    w[[2, -3], :] *= 0.5
+    w[:, [2, -3]] *= 0.5
+    return float((depth * w)[INNER].sum() * solver.dx * solver.dy)
+
+
+def _section_q(state: np.ndarray, i: int, comp: int, dy: float) -> float:
+    """Discharge through column ``i``: interior rows, wall rows (2, n-3) weighted half."""
+    hu = state[i, 2:-2, comp].astype(np.float64)
+    hu[0] *= 0.5
+    hu[-1] *= 0.5
+    return float(hu.sum() * dy)
 
 
 def _strip_mask(solver: Solver, i0: int, i1: int) -> np.ndarray:
     mask = np.zeros((solver.nx, solver.ny), dtype=bool)
-    mask[i0:i1, 2:-2] = True
+    mask[i0:i1, 3:-3] = True  # off the wall cells (rows 2 and n-3)
     return mask
 
 
@@ -131,7 +148,9 @@ def test_closed_basin_gains_hydrograph_volume(tmp_path: Path, times, q) -> None:
     assert src.volume_m3 == pytest.approx(30.0)
     assert v_on == pytest.approx(src.volume_m3, rel=0.03)
     assert v_after == pytest.approx(v_on, rel=0.02)
-    area = (solver.nx - 4) * (solver.ny - 4) * solver.dx * solver.dy
+    area = (
+        (solver.nx - 5) * (solver.ny - 5) * solver.dx * solver.dy
+    )  # walls through cell centres
     assert _eta(solver)[INNER].mean() == pytest.approx(src.volume_m3 / area, rel=0.03)
 
 
@@ -149,8 +168,7 @@ def test_open_channel_carries_the_discharge(tmp_path: Path) -> None:
     for i in range(int(300.0 / dt)):
         run.Evolve_Steps(i)
         if i * dt > 200.0 and i % 20 == 0:
-            hu = solver.State.to_numpy()[i_mid, :, 1]
-            flux.append(float(hu.sum() * solver.dy))
+            flux.append(_section_q(solver.State.to_numpy(), i_mid, 1, solver.dy))
     assert np.isfinite(solver.State.to_numpy()).all()
     assert np.mean(flux) == pytest.approx(q_in, rel=0.15)
 
@@ -335,7 +353,9 @@ def test_read_discharge_series_telemac_style(tmp_path: Path) -> None:
     from celeris.hydrograph import read_discharge_series
 
     f = tmp_path / "inflow.liq"
-    f.write_text("# hydrograph\nT Q(2)\ns m3/s\n0.0 50.0\n7200.0 1000.0\n18800.0, 50.0\n")
+    f.write_text(
+        "# hydrograph\nT Q(2)\ns m3/s\n0.0 50.0\n7200.0 1000.0\n18800.0, 50.0\n"
+    )
     t, q = read_discharge_series(str(f))
     assert t.tolist() == [0.0, 7200.0, 18800.0]
     assert q.tolist() == [50.0, 1000.0, 50.0]
@@ -359,12 +379,22 @@ def test_discharge_boundary_closed_basin_volume(tmp_path: Path) -> None:
     river = DischargeBoundary(solver, "west", [0.0, 30.0], [1.0, 1.0])
     solver.inflows.append(river)
     run.Evolve_0()
-    v0 = _wet_volume(solver)
+
+    def vol() -> (
+        float
+    ):  # west column is the inflow face, a full cell; other edges are walls
+        depth = np.maximum(_eta(solver) - _bed(solver), 0.0)
+        w = np.ones_like(depth)
+        w[-3, :] *= 0.5
+        w[:, [2, -3]] *= 0.5
+        return float((depth * w)[INNER].sum() * solver.dx * solver.dy)
+
+    v0 = vol()
     dt = float(solver.dt)
     for i in range(round(30.0 / dt)):
         run.Evolve_Steps(i)
     assert np.isfinite(solver.State.to_numpy()).all()
-    assert _wet_volume(solver) - v0 == pytest.approx(river.volume_m3, rel=0.03)
+    assert vol() - v0 == pytest.approx(river.volume_m3, rel=0.03)
 
 
 def test_discharge_boundary_channel_flux(tmp_path: Path) -> None:
@@ -382,9 +412,47 @@ def test_discharge_boundary_channel_flux(tmp_path: Path) -> None:
     for i in range(int(300.0 / dt)):
         run.Evolve_Steps(i)
         if i * dt > 200.0 and i % 20 == 0:
-            st = solver.State.to_numpy()
-            flux.append(float(st[i_mid, :, 1].sum() * solver.dy))
+            flux.append(_section_q(solver.State.to_numpy(), i_mid, 1, solver.dy))
     eta = _eta(solver)[INNER]
     assert np.isfinite(solver.State.to_numpy()).all()
     assert np.mean(flux) == pytest.approx(q_in, rel=0.15)
     assert eta[:8].mean() - eta[-8:].mean() < 0.02  # no hump at the inlet
+
+
+# ---------------------------------------------------------------------------
+# Several interior sources at once, and the location helper.
+# ---------------------------------------------------------------------------
+
+
+def test_two_sources_add_up_and_overlap_is_refused(tmp_path: Path) -> None:
+    from celeris.hydrograph import inlet_mask
+
+    solver, run = _build_basin(tmp_path, lambda x: np.full_like(x, 1.0))
+    run.Evolve_0()  # zero state = still water at the datum, so wetness is known
+    m1 = inlet_mask(solver, 8.0, 4.0, 1.5)
+    m2 = inlet_mask(solver, 30.0, 4.0, 1.5)
+    assert m1.sum() == pytest.approx(np.pi * 1.5**2 / (solver.dx * solver.dy), rel=0.15)
+    assert not (m1 & m2).any()
+    s1 = HydrographSource(solver, m1, [0.0, 30.0], [1.0, 1.0])
+    solver.inflows.append(s1)
+    s2 = HydrographSource(solver, m2, [0.0, 15.0, 30.0], [0.0, 2.0, 0.0])
+    solver.inflows.append(s2)
+    with pytest.raises(ValueError, match="overlaps"):
+        HydrographSource(
+            solver, inlet_mask(solver, 9.0, 4.0, 1.5), [0.0, 1.0], [1.0, 1.0]
+        )
+    v0 = _wet_volume(solver)
+    dt = float(solver.dt)
+    for i in range(round(30.0 / dt)):
+        run.Evolve_Steps(i)
+    gained = _wet_volume(solver) - v0
+    assert gained == pytest.approx(s1.volume_m3 + s2.volume_m3, rel=0.03)
+
+
+def test_inlet_mask_rejects_dry_location(tmp_path: Path) -> None:
+    from celeris.hydrograph import inlet_mask
+
+    solver, run = _build_basin(tmp_path, lambda x: (20.0 - x) / 10.0)  # dry for x > 20
+    run.Evolve_0()
+    with pytest.raises(ValueError, match="no wet cell"):
+        inlet_mask(solver, 30.0, 4.0, 1.0)

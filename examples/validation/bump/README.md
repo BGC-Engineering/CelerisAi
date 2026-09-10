@@ -50,13 +50,16 @@ four cells; the shock position is within one TELEMAC element.
 | case | crest depth (m) | depth at x = 2 m | unit discharge upstream | L1 depth error |
 |---|---|---|---|---|
 | TELEMAC HLLC, 8 sources at x = 1 m, transcritical | 0.180 | 0.497 | 0.224 | 0.0048 |
-| Celeris `HydrographSource`, strip at x = 1 m, dx 0.05 m | 0.1728 | 0.499 | 0.225 | 0.0045 |
+| Celeris `HydrographSource`, strip at x = 1 m, dx 0.05 m | 0.176 | 0.503 | 0.230 (centreline) | 0.0054 |
 | TELEMAC HLLC, subcritical | 0.473 | 0.807 | 0.745 | 0.0078 |
-| Celeris `HydrographSource`, subcritical | 0.471 | 0.806 | 0.750 | 0.0067 |
+| Celeris `HydrographSource`, subcritical | 0.460 | 0.806 | 0.768 (centreline) | 0.0059 |
 
-The interior source reproduces the discharge-boundary result and the exact
-solution to the same accuracy as TELEMAC's sources do, with no inlet hump in a
-20 m channel once the strip sits clear of the wall column.
+The interior source reproduces the exact solution to the same accuracy as
+TELEMAC's sources do, with no inlet hump in a 20 m channel once the strip sits
+clear of the wall column. The centreline unit discharge reads 2.4 % above the
+imposed mean because Celeris' wall passes through the centre of the first
+interior row (that row counts half) and the centreline carries slightly more
+than the section mean; the section-integrated discharge is the imposed one.
 
 ## Two setup rules this case taught
 
@@ -65,8 +68,13 @@ solution to the same accuracy as TELEMAC's sources do, with no inlet hump in a
    slope) froze the rows beside the pad and the centreline carried 30 % more
    than the mean discharge. The wall condition is the reflection itself; the
    pad must not be a step.
-2. **Keep an interior source clear of the first interior column.** A strip
-   touching the wall column leaked 25 % of its volume into the ghost rim.
+2. **Keep an interior source off the three outer rows and columns.** Celeris'
+   solid wall passes through the centre of the first interior cell (index 2 and
+   n-3), so only half of that cell is inside the domain: a source there injects
+   half its volume into the mirror image (a strip on the wall rows lost 3.6 %,
+   one touching the wall column 25 %). `HydrographSource` now refuses such masks
+   and `inlet_mask` never produces them. Volume accounting must weight those
+   cells by one half; with that, the scheme conserves to 1e-4.
 
 ## Limiter parameter `theta` (`--theta`, default 2 as in Celeris)
 

@@ -104,6 +104,9 @@ def run_case(
     bed0 = solver.Bottom.to_numpy()[2].astype(np.float32)
     dx, dy = float(solver.dx), float(solver.dy)
     inner = (slice(GHOST, -GHOST), slice(GHOST, -GHOST))
+    wall_w = np.ones_like(bed0, dtype=np.float64)
+    wall_w[[GHOST, -GHOST - 1], :] *= 0.5
+    wall_w[:, [GHOST, -GHOST - 1]] *= 0.5
     frame_steps: dict[str, int] = {
         f"t{int(T):04d}": round(T / dt)
         for T in cfg["frames_s"]  # type: ignore[attr-defined]
@@ -142,7 +145,8 @@ def run_case(
         depth = eta - bed
         wet = depth > cases.DRY_M
         series["t_s"].append(n * dt)
-        series["volume_m3"].append(float(depth[inner][wet[inner]].sum() * dx * dy))
+        # walls pass through the centre of the first interior cell: count it half
+        series["volume_m3"].append(float((depth * wall_w)[inner][wet[inner]].sum() * dx * dy))
         if run.sample is not None:
             for k, v in run.sample(eta, bed).items():
                 series.setdefault(k, []).append(v)

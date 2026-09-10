@@ -12,12 +12,14 @@ level and mass is conserved exactly: ``d(eta)/dt = Q(t) / A_patch`` on the
 patch. No momentum is injected; the flow develops under gravity, which is the
 intended behaviour for a river or outburst flood entering a lake.
 
-The object speaks the protocol ``Evolve_Steps`` expects on ``solver.landslide``
-(``snapshot_initial_bed`` / ``update`` / ``is_active`` / ``deactivate``), so
-attaching it is one assignment and no solver or runner code changes.
+Attach any number of sources with ``solver.inflows.append(src)`` (different
+locations must not overlap; a slide can run alongside). The object also speaks
+the ``solver.landslide`` protocol (``snapshot_initial_bed`` / ``update`` /
+``is_active`` / ``deactivate``) for single-source scripts written before the
+``inflows`` list existed.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 import taichi as ti
@@ -62,6 +64,14 @@ class HydrographSource:
             )
         if not mask_np.any():
             raise ValueError("inlet mask has no cells")
+        # Celeris puts a solid wall through the CENTRE of the first interior cell
+        # (index 2 and n-3): only half of such a cell is inside the domain, so a
+        # source there would inject half its volume into the mirror image.
+        edge = np.zeros_like(mask_np)
+        edge[:3, :] = edge[-3:, :] = True
+        edge[:, :3] = edge[:, -3:] = True
+        if (mask_np & edge).any():
+            raise ValueError("inlet mask touches the three outer rows/columns (ghost rim and wall cell)")
         t = np.asarray(times_s, dtype=np.float64)
         q = np.asarray(discharge_m3s, dtype=np.float64)
         if t.ndim != 1 or t.shape != q.shape or t.size < 2:
@@ -76,9 +86,15 @@ class HydrographSource:
         self.mask_np = mask_np
         self.area_m2 = float(mask_np.sum()) * float(solver.dx) * float(solver.dy)
         self.min_depth_m = max(float(solver.delta), float(min_depth_m))
+        for other in getattr(solver, "inflows", []):
+            if isinstance(other, HydrographSource) and (other.mask_np & mask_np).any():
+                raise ValueError(
+                    "inlet mask overlaps a HydrographSource already in solver.inflows"
+                )
         self.mask = ti.field(ti.i32, shape=mask_np.shape)
         self.mask.from_numpy(mask_np.astype(np.int32))
         self._cleared = False
+        self._checked = False
 
     @property
     def volume_m3(self) -> float:
@@ -91,14 +107,18 @@ class HydrographSource:
         return q / self.area_m2
 
     def snapshot_initial_bed(self) -> None:
-        """Protocol hook, called once after ``InitStates``: check the inlet is wet.
+        """Protocol hook (``solver.landslide`` slot): run the wet check."""
+        self.check_wet()
 
-        The bed never moves, so nothing is snapshotted; this is the first
-        moment the initial state exists, hence the wet check lives here.
+    def check_wet(self) -> None:
+        """Refuse an inlet with dry cells; runs once, on the initial state.
 
         Raises:
             ValueError: If any inlet cell is dry (depth <= ``min_depth_m``).
         """
+        if self._checked:
+            return
+        self._checked = True
         eta = self.solver.State.to_numpy()[:, :, 0]
         bed = self.solver.Bottom.to_numpy()[2]
         dry = self.mask_np & ((eta - bed) <= self.min_depth_m)
@@ -118,6 +138,7 @@ class HydrographSource:
 
     def update(self, t: float) -> None:
         """Set the continuity source to ``Q(t) / A_patch`` on the inlet."""
+        self.check_wet()
         self._apply(self.rate_at(t))
 
     def is_active(self, t: float) -> bool:
@@ -129,6 +150,42 @@ class HydrographSource:
         if not self._cleared:
             self._apply(0.0)
             self._cleared = True
+
+
+def inlet_mask(
+    solver: "Solver",
+    x_m: float,
+    y_m: float,
+    radius_m: float,
+    min_depth_m: float = 0.0,
+) -> "np.ndarray":
+    """Boolean ``(nx, ny)`` mask of the wet cells within ``radius_m`` of a point.
+
+    Coordinates are grid coordinates (cell ``i, j`` sits at ``i * dx, j * dy``;
+    subtract the domain origin first). Wetness is read from the current state,
+    so call it after the initial condition is set (a still lake at the datum is
+    the zero state). The ghost rim and the wall cells (three outer rows and
+    columns) are excluded.
+
+    Raises:
+        ValueError: If no wet cell lies inside the disk.
+    """
+    import numpy as np
+
+    nx, ny = solver.nx, solver.ny
+    xg, yg = np.meshgrid(
+        np.arange(nx) * float(solver.dx),
+        np.arange(ny) * float(solver.dy),
+        indexing="ij",
+    )
+    disk = (xg - x_m) ** 2 + (yg - y_m) ** 2 <= radius_m**2
+    depth = solver.State.to_numpy()[:, :, 0] - solver.Bottom.to_numpy()[2]
+    mask = disk & (depth > max(float(solver.delta), min_depth_m))
+    mask[:3, :] = mask[-3:, :] = False  # ghost rim plus the wall cell (see HydrographSource)
+    mask[:, :3] = mask[:, -3:] = False
+    if not mask.any():
+        raise ValueError(f"no wet cell within {radius_m} m of ({x_m}, {y_m})")
+    return mask
 
 
 def read_discharge_series(path: "str") -> "tuple[np.ndarray, np.ndarray]":
@@ -168,7 +225,7 @@ class DischargeBoundary:
             Linear interpolation, zero outside the sampled interval.
     """
 
-    SIDES = {"west": 0, "east": 1, "south": 2, "north": 3}
+    SIDES: ClassVar[dict[str, int]] = {"west": 0, "east": 1, "south": 2, "north": 3}
 
     def __init__(
         self,
@@ -179,13 +236,22 @@ class DischargeBoundary:
     ) -> None:
         if side not in self.SIDES:
             raise ValueError(f"side must be one of {list(self.SIDES)}, got {side!r}")
-        bc_type = {"west": solver.bcWest, "east": solver.bcEast, "south": solver.bcSouth, "north": solver.bcNorth}[side]
+        bc_type = {
+            "west": solver.bcWest,
+            "east": solver.bcEast,
+            "south": solver.bcSouth,
+            "north": solver.bcNorth,
+        }[side]
         if int(bc_type) != 5:
-            raise ValueError(f"{side} boundary is type {bc_type}; DischargeBoundary needs type 5")
+            raise ValueError(
+                f"{side} boundary is type {bc_type}; DischargeBoundary needs type 5"
+            )
         t = np.asarray(times_s, dtype=np.float64)
         q = np.asarray(discharge_m3s, dtype=np.float64)
         if t.ndim != 1 or t.shape != q.shape or t.size < 2 or np.any(np.diff(t) <= 0.0):
-            raise ValueError("times_s must be strictly increasing and match discharge_m3s")
+            raise ValueError(
+                "times_s must be strictly increasing and match discharge_m3s"
+            )
         self.solver = solver
         self.side = self.SIDES[side]
         self.times_s = t
@@ -197,9 +263,13 @@ class DischargeBoundary:
         return float(_trapezoid(self.discharge_m3s, self.times_s))
 
     def discharge_at(self, t: float) -> float:
-        return float(np.interp(t, self.times_s, self.discharge_m3s, left=0.0, right=0.0))
+        return float(
+            np.interp(t, self.times_s, self.discharge_m3s, left=0.0, right=0.0)
+        )
 
     def update(self, t: float) -> None:
         """Store ``Q(t)`` and the current wet section area for the boundary kernel."""
         self.solver.InflowQ[self.side] = self.discharge_at(t)
-        self.solver.InflowArea[self.side] = float(self.solver.inflow_section_area(self.side))
+        self.solver.InflowArea[self.side] = float(
+            self.solver.inflow_section_area(self.side)
+        )

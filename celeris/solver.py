@@ -969,7 +969,7 @@ class Solver:
                     eta_m = srcState[self.BCShift - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.BCShift - i, j], 0.0)
                     hu_in = 0.0
-                    if h_m > self.delta and self.InflowArea[0] > 0.0:
+                    if h_m > self.delta and self.InflowArea[0] > 0.0 and j >= 3 and j <= self.ny - 4:
                         hu_in = h_m * self.InflowQ[0] / self.InflowArea[0]
                     BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.BCShift - i, j][3]], self.precision)
                     BCState_Sed = 0.0
@@ -977,7 +977,7 @@ class Solver:
                     eta_m = srcState[self.R_x - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.R_x - i, j], 0.0)
                     hu_in = 0.0
-                    if h_m > self.delta and self.InflowArea[1] > 0.0:
+                    if h_m > self.delta and self.InflowArea[1] > 0.0 and j >= 3 and j <= self.ny - 4:
                         hu_in = -h_m * self.InflowQ[1] / self.InflowArea[1]
                     BCState = ti.Vector([eta_m, hu_in, 0.0, srcState[self.R_x - i, j][3]], self.precision)
                     BCState_Sed = 0.0
@@ -985,7 +985,7 @@ class Solver:
                     eta_m = srcState[i, self.BCShift - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.BCShift - j], 0.0)
                     hv_in = 0.0
-                    if h_m > self.delta and self.InflowArea[2] > 0.0:
+                    if h_m > self.delta and self.InflowArea[2] > 0.0 and i >= 3 and i <= self.nx - 4:
                         hv_in = h_m * self.InflowQ[2] / self.InflowArea[2]
                     BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.BCShift - j][3]], self.precision)
                     BCState_Sed = 0.0
@@ -993,7 +993,7 @@ class Solver:
                     eta_m = srcState[i, self.R_y - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.R_y - j], 0.0)
                     hv_in = 0.0
-                    if h_m > self.delta and self.InflowArea[3] > 0.0:
+                    if h_m > self.delta and self.InflowArea[3] > 0.0 and i >= 3 and i <= self.nx - 4:
                         hv_in = -h_m * self.InflowQ[3] / self.InflowArea[3]
                     BCState = ti.Vector([eta_m, 0.0, hv_in, srcState[i, self.R_y - j][3]], self.precision)
                     BCState_Sed = 0.0
@@ -1261,13 +1261,13 @@ class Solver:
             i = 2
             if side == 1:
                 i = self.nx - 3
-            for j in range(2, self.ny - 2):
+            for j in range(3, self.ny - 3):  # wall rows 2 and ny-3 carry no inflow
                 area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dy
         else:
             j = 2
             if side == 3:
                 j = self.ny - 3
-            for i in range(2, self.nx - 2):
+            for i in range(3, self.nx - 3):  # wall columns 2 and nx-3 carry no inflow
                 area += ti.max(self.State[i, j][0] - self.Bottom[2, i, j], 0.0) * self.dx
         return area
 

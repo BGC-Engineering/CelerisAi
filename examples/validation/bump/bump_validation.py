@@ -125,7 +125,7 @@ def run(
         # touching the first interior column leaks into the ghost rim.
         i_src = round(1.0 / DX_M) + PAD
         inlet = np.zeros((nx, ny), dtype=bool)
-        inlet[i_src - 1 : i_src + 1, PAD : ny - PAD] = True
+        inlet[i_src - 1 : i_src + 1, PAD + 1 : ny - PAD - 1] = True  # off the wall cells
         solver.landslide = HydrographSource(
             solver, inlet, [0.0, 1.0e6], [q_total, q_total]
         )
