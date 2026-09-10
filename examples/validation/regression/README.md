@@ -177,3 +177,12 @@ after `legacy` was frozen, so its frames do not align with that first tag.
 `legacy_det` and `conserving3` bitwise except `breach`, whose grid changed (the
 ghost rim now mirrors the interior instead of a 20 m wall). Legacy blows up at
 step 138 on that grid; `breach` is compared for the conserving scheme only.
+
+## Update: v3 baselines (volume metric with half-weight wall cells)
+
+Celeris' solid wall passes through the centre of the first interior cell
+(`BoundaryShift = 4`), so the interior volume now weights those cells by one
+half. `legacy_v3` / `conserving_v3` were frozen with that metric on the same
+code as v2: every eta frame and envelope is bitwise identical to v2 (except
+`malpasset_seed`, whose case-side seed kernel is racy); only the volume series
+differ. Use v3 as the reference from here on.
