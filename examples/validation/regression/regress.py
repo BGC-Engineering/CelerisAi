@@ -24,7 +24,10 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cases
 
-ROOT_DEFAULT = Path("/mnt/d/Homathko/Validation/baseline")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from paths import baseline_root
+
+ROOT_DEFAULT = baseline_root()
 HERE = Path(__file__).resolve().parent
 GHOST = 2  # ghost rim excluded from the volume
 
@@ -487,6 +490,106 @@ def sanity(*, root: Path) -> None:
         json.dump(res, fh, indent=1, default=float)
 
 
+def plot(*, root: Path, tag_a: str, tag_b: str, out_dir: Path | None = None) -> None:
+    """Per-case maps: max depth of A, of B, and B minus A (max eta), one PNG per case."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = out_dir or HERE / "results"
+    out_dir.mkdir(exist_ok=True)
+    titles = {
+        "tracyarm_gen": "Tracy Arm (Endicott Generation Grid)",
+        "balboa": "Balboa Beach",
+        "crescentcity": "Crescent City",
+        "mavericks": "Mavericks",
+        "ventura": "Ventura",
+        "breach": "TELEMAC Breach Channel",
+        "malpasset": "Malpasset Dam Break",
+        "malpasset_seed": "Malpasset Dam Break (Seed Wetting)",
+    }
+    for name in sorted(cases.CASES):
+        try:
+            fa, ma = _load(root / tag_a / name)
+            fb, mb = _load(root / tag_b / name)
+        except FileNotFoundError:
+            logger.warning("{}: missing in {} or {}", name, tag_a, tag_b)
+            continue
+        bed = fa["bed"]
+        if bed.shape != fb["bed"].shape:
+            logger.warning("{}: grids differ, skipped", name)
+            continue
+        nx, ny = bed.shape
+        dx = float(ma.get("dx_m", 1.0))
+        ea, eb = fa["env_max"], fb["env_max"]
+        da = np.where(np.isfinite(ea), ea - bed, np.nan)
+        db = np.where(np.isfinite(eb), eb - bed, np.nan)
+        diff = np.where(
+            np.isfinite(eb) & np.isfinite(ea),
+            eb - ea,
+            np.where(
+                np.isfinite(eb),
+                eb - bed,
+                np.where(np.isfinite(ea), -(ea - bed), np.nan),
+            ),
+        )
+        ext = (0, nx * dx, 0, ny * dx)
+        g = GHOST
+        vmax = float(
+            np.nanpercentile(
+                np.concatenate([da[g:-g, g:-g].ravel(), db[g:-g, g:-g].ravel()]), 99.5
+            )
+        )
+        dlim = max(0.05, float(np.nanpercentile(np.abs(diff[g:-g, g:-g]), 99.5)))
+        fig, axes = plt.subplots(1, 3, figsize=(19, 6.2), constrained_layout=True)
+        for ax, d_, lab in zip(axes[:2], (da, db), (tag_a, tag_b)):
+            ax.imshow(bed.T, origin="lower", extent=ext, cmap="Greys", alpha=0.45)
+            im = ax.imshow(
+                d_.T, origin="lower", extent=ext, cmap="Blues", vmin=0, vmax=vmax
+            )
+            ax.set_title(
+                f"{lab}: Maximum Depth (m), Ever-Wet Cells {int(np.isfinite(d_[g:-g, g:-g]).sum()):,}"
+            )
+            ax.set_xlabel("X (m)")
+            ax.set_ylabel("Y (m)")
+        fig.colorbar(im, ax=axes[1], shrink=0.75, label="Maximum Depth (m)")
+        ax = axes[2]
+        ax.imshow(bed.T, origin="lower", extent=ext, cmap="Greys", alpha=0.45)
+        im2 = ax.imshow(
+            diff.T, origin="lower", extent=ext, cmap="RdBu_r", vmin=-dlim, vmax=dlim
+        )
+        ax.set_title(f"{tag_b} Minus {tag_a}: Maximum Eta (m)")
+        ax.set_xlabel("X (m)")
+        fig.colorbar(im2, ax=ax, shrink=0.75, label="Difference (m)")
+        keys = [
+            k
+            for k in (
+                "max_runup_m",
+                "max_eta_m",
+                "min_trough_m",
+                "A_to_B_s",
+                "A_to_C_s",
+                "floodplain_wet_fraction_final",
+                "volume_change_frac",
+            )
+            if k in ma
+        ]
+        sub = "; ".join(
+            f"{k}: {ma[k]:.3g} -> {mb[k]:.3g}"
+            if isinstance(ma.get(k), (int, float))
+            and isinstance(mb.get(k), (int, float))
+            else f"{k}: {ma.get(k)} -> {mb.get(k)}"
+            for k in keys
+        )
+        fig.suptitle(
+            f"{titles.get(name, name)}: {tag_a} Vs {tag_b}\n{sub}", fontsize=11
+        )
+        fig.savefig(out_dir / f"regress_{name}_{tag_a}_vs_{tag_b}.png", dpi=110)
+        plt.close(fig)
+        logger.info("wrote {}", out_dir / f"regress_{name}_{tag_a}_vs_{tag_b}.png")
+
+
 def main() -> None:
     """CLI entry point."""
     logger.remove()
@@ -513,6 +616,11 @@ def main() -> None:
     p.add_argument("--a", type=Path, required=True)
     p.add_argument("--b", type=Path, required=True)
     p.add_argument("--tol", type=float, default=1e-3)
+    p = sub.add_parser("plot", help="per-case maps of two baselines")
+    p.add_argument("--a", required=True, help="baseline tag A")
+    p.add_argument("--b", required=True, help="baseline tag B")
+    p.add_argument("--root", type=Path, default=ROOT_DEFAULT)
+    p.add_argument("--out", type=Path, default=None)
     p = sub.add_parser("sanity")
     p.add_argument("--root", type=Path, default=ROOT_DEFAULT)
     p = sub.add_parser("_run", help="internal: run one case in this process")
@@ -551,6 +659,8 @@ def main() -> None:
         compare(a=a.root / a.tag, b=new, tol=a.tol)
     elif a.cmd == "compare":
         compare(a=a.a, b=a.b, tol=a.tol)
+    elif a.cmd == "plot":
+        plot(root=a.root, tag_a=a.a, tag_b=a.b, out_dir=a.out)
     elif a.cmd == "sanity":
         sanity(root=a.root)
 

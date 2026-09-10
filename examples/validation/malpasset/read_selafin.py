@@ -1,4 +1,5 @@
 """Minimal Selafin (TELEMAC .slf, big-endian Fortran records) reader."""
+
 import struct
 import sys
 
@@ -42,16 +43,43 @@ def read_selafin(path):
             frame = [np.frombuffer(_rec(f), dtype=">f4") for _ in range(nbv1 + nbv2)]
             values.append(np.stack(frame))
     values = np.array(values, dtype=np.float32)
-    return dict(
-        title=title, varnames=names, nelem=nelem, npoin=npoin, ndp=ndp, ikle=ikle,
-        ipobo=ipobo, x=x, y=y, times=np.array(times, dtype=np.float64), values=values,
-        variables={n: values[:, k] for k, n in enumerate(names)},
-    )
+    return {
+        "title": title,
+        "varnames": names,
+        "nelem": nelem,
+        "npoin": npoin,
+        "ndp": ndp,
+        "ikle": ikle,
+        "ipobo": ipobo,
+        "x": x,
+        "y": y,
+        "times": np.array(times, dtype=np.float64),
+        "values": values,
+        "variables": {n: values[:, k] for k, n in enumerate(names)},
+    }
 
 
 if __name__ == "__main__":
     m = read_selafin(sys.argv[1])
-    print(m["title"], "|", m["varnames"], "| nelem", m["nelem"], "npoin", m["npoin"], "ndp", m["ndp"])
+    print(
+        m["title"],
+        "|",
+        m["varnames"],
+        "| nelem",
+        m["nelem"],
+        "npoin",
+        m["npoin"],
+        "ndp",
+        m["ndp"],
+    )
     print("x", m["x"].min(), m["x"].max(), "y", m["y"].min(), m["y"].max())
     for k, v in enumerate(m["varnames"]):
-        print(v, "min", m["values"][:, k].min(), "max", m["values"][:, k].max(), "frames", len(m["times"]))
+        print(
+            v,
+            "min",
+            m["values"][:, k].min(),
+            "max",
+            m["values"][:, k].max(),
+            "frames",
+            len(m["times"]),
+        )

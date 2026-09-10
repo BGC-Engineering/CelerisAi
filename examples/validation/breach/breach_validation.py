@@ -26,11 +26,13 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "malpasset"))
+sys.path.insert(0, str(HERE.parent))
+from paths import celeris_out, telemac_example, telemac_ref
 from read_selafin import read_selafin
 
-MESH_DIR = Path.home() / "telemac-mascaret/examples/telemac2d/breach"
-TELEMAC_REF = Path("/mnt/d/Homathko/Validation/telemac/breach_nobreach_restart")
-OUT_DEFAULT = Path("/mnt/d/Homathko/Validation/celeris/breach")
+MESH_DIR = telemac_example("breach")
+TELEMAC_REF = telemac_ref() / "breach_nobreach_restart"
+OUT_DEFAULT = celeris_out("breach")
 
 # Celeris datum (m a.s.l.). It must sit BELOW every piece of terrain that has to
 # stay dry: the wet/dry logic treats cells with bed <= datum as sea floor and lets
@@ -101,10 +103,7 @@ def prep(out: Path) -> None:
     outlet &= inside & (bed < 6.0)  # channel section only
     floodplain = inside & (yg > 42.0) & (xg > 2000.0) & (xg < 3000.0)
     probes = np.array(
-        [
-            [int(round(px / DX_M)) + PAD, int(round(PROBE_Y_M / DX_M)) + PAD]
-            for px in PROBES_X_M
-        ]
+        [[round(px / DX_M) + PAD, round(PROBE_Y_M / DX_M) + PAD] for px in PROBES_X_M]
     )
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(

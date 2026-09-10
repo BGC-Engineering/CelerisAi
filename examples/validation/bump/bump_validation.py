@@ -21,7 +21,10 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "malpasset"))
-TELEMAC_BUMP = Path.home() / "telemac-mascaret/examples/telemac2d/bump"
+sys.path.insert(0, str(HERE.parent))
+from paths import celeris_out, telemac_example, telemac_ref
+
+TELEMAC_BUMP = telemac_example("bump")
 sys.path.insert(0, str(TELEMAC_BUMP))
 from analytic_sol import BumpAnalyticSol
 from read_selafin import read_selafin
@@ -160,7 +163,7 @@ def run(
     }
 
 
-TELEMAC_REF = Path("/mnt/d/Homathko/Validation/telemac")
+TELEMAC_REF = telemac_ref()
 
 
 def telemac_centreline(regime: str, inflow: str) -> dict[str, np.ndarray] | None:
@@ -213,9 +216,7 @@ def main() -> None:
         help="limiter parameter(s), one run per value",
     )
     ap.add_argument("--tag", default="")
-    ap.add_argument(
-        "--out", type=Path, default=Path("/mnt/d/Homathko/Validation/celeris/bump")
-    )
+    ap.add_argument("--out", type=Path, default=celeris_out("bump"))
     a = ap.parse_args()
     global DX_M
     DX_M = a.dx

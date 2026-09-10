@@ -33,7 +33,10 @@ if TYPE_CHECKING:
 
 CELERIS_DIR = Path(__file__).resolve().parents[3]
 CALIBRATION_DIR = CELERIS_DIR.parent / "calibration"
-VALIDATION_OUT = Path("/mnt/d/Homathko/Validation/celeris")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from paths import data_root
+
+VALIDATION_OUT = data_root() / "celeris"
 BREACH_SCRIPT = CELERIS_DIR / "examples/validation/breach/breach_validation.py"
 MALPASSET_DIR = CELERIS_DIR / "examples/validation/malpasset"
 TRACYARM_GENERATE = CALIBRATION_DIR / "TracyArm/generate.py"
