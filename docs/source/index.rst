@@ -24,6 +24,7 @@ Documentation for the Code
    introduction
    usage
    modules
+   bed_motion_format
   
 
 
