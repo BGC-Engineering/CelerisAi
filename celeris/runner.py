@@ -207,6 +207,9 @@ class Evolve:
                     self.solver.tridiag_coeffs_Y()
             else:
                 self.solver.landslide.deactivate()
+        # Discharge (hydrograph) boundaries: refresh Q(t) and the wet section area.
+        for inflow in self.solver.inflows:
+            inflow.update(self.dt * i)
 
         self.solver.Pass1(step=i)
 

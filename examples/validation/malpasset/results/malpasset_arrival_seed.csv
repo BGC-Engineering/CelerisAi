@@ -1,0 +1,5 @@
+quantity,observed,celeris,telemac_hllc_frames20s,telemac_hllc_rfo
+arrival_A_s,,115.7,120.0,97.2
+A_to_B_s,1140.0,1216.3,1160.0,1127.8
+A_to_C_s,1320.0,1310.4,1360.0,1369.3
+arrival_threshold_m,,0.05,,

@@ -37,6 +37,30 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+### Wet/dry scheme (BGC fork)
+
+`Solver(..., wetdry_scheme="legacy" | "conserving")`, default `"legacy"`, which
+reproduces upstream CelerisAi bit for bit. `"conserving"` changes only the
+treatment of wet/dry faces:
+
+- a dry cell carries no face depth, so the flat `eta = bed` reconstruction no
+  longer puts phantom water on the face that looks down onto a lower neighbour;
+- a wet surface standing above a dry neighbour's bed drives a flux into it
+  (gravity-driven wetting); a wet/dry face without wetting is a wall for mass
+  and momentum (legacy drains momentum into the dry cell, a numerical wall drag);
+- fully dry cells keep `eta = bed` instead of `eta = 0`, so terrain below the
+  datum no longer fills with water;
+- sub-`delta` water is kept rather than reset to the bed, and isolated wet cells
+  are not deleted, so mass is conserved;
+- the explicit Manning friction rate is capped at `0.5 / dt` in thin films.
+
+Validation: `examples/validation/breach` (TELEMAC-2D hydrograph routing and dyke
+overtopping) and `examples/validation/malpasset` (1959 dam break) both take
+`--wetdry conserving`; `tests/test_hydrograph.py` pins the behaviours above.
+Use `"conserving"` for anything where a slowly rising level must wet dry ground
+(reservoir filling, overtopping of a crest, lake inflow); the legacy scheme only
+wets a cell when momentum already points at it.
+
 ## Documentation
 The full user guide, API references, and examples live in the Sphinx docs under `docs/`. Hosted documentation is available at [CelerisAi’s documentation](https://wrenteria.github.io/CelerisAi/).
 

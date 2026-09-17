@@ -1,0 +1,7 @@
+case,model,L1_depth_m
+"Stoker (Wet Bed, h_r = 0.2 m)",Celeris legacy,0.001847247676148746
+"Stoker (Wet Bed, h_r = 0.2 m)",Celeris conserving,0.001847247676148746
+"Stoker (Wet Bed, h_r = 0.2 m)",TELEMAC HLLC,0.0065231835865371315
+Ritter (Dry Bed),Celeris legacy,0.14285336475159838
+Ritter (Dry Bed),Celeris conserving,0.012200366744790584
+Ritter (Dry Bed),TELEMAC HLLC,0.007173270116388845
