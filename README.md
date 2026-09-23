@@ -57,6 +57,13 @@ treatment of wet/dry faces:
 Validation: `examples/validation/breach` (TELEMAC-2D hydrograph routing and dyke
 overtopping) and `examples/validation/malpasset` (1959 dam break) both take
 `--wetdry conserving`; `tests/test_hydrograph.py` pins the behaviours above.
+
+Outlets: `celeris.spillway.SpillwaySink` draws a level-dependent discharge
+(`Q(h_up, h_down)` from a Poleni weir law or a stage-discharge table) off a wet
+patch, optionally into an outlet patch, through the same continuity source as
+the hydrograph inflows. `tests/test_spillway.py` checks it against the exact
+tank-drawdown solution; `examples/validation/spillway` is the TELEMAC-2D
+`weirs2` twin (six ponds, five weirs, levels within 1.4 cm over 12 h).
 Use `"conserving"` for anything where a slowly rising level must wet dry ground
 (reservoir filling, overtopping of a crest, lake inflow); the legacy scheme only
 wets a cell when momentum already points at it.
