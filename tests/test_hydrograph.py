@@ -424,6 +424,44 @@ def test_discharge_boundary_channel_flux(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_discharge_boundary_dry_bank_stays_dry(tmp_path: Path) -> None:
+    """A dry bank rising away from a type-5 edge gains no water with Q = 0.
+
+    The ghost cells mirror the interior surface; on a dry mirror cell that is
+    its bed, which stands above the lower ghost bed. Without the dry-mirror
+    guard that phantom column spills onto the bank.
+    """
+    from celeris.hydrograph import DischargeBoundary
+
+    ti.init(arch=ti.cpu, default_fp=ti.f32)
+    # one sample per cell, so every cell of the bank steps up from the last
+    xs, ys = np.linspace(0.0, 40.0, 161), np.linspace(0.0, 8.0, 33)
+    xg, yg = np.meshgrid(xs, ys)
+    depth = np.where(yg < 4.0, 1.0, -(0.5 + 0.05 * xg))  # channel | rising bank
+    np.savetxt(
+        tmp_path / "bank.xyz", np.column_stack([xg.ravel(), yg.ravel(), depth.ravel()])
+    )
+    topo = Topodata(filename="bank.xyz", path=str(tmp_path), datatype="xyz")
+    bc = BoundaryConditions(
+        celeris=False, North=0, South=0, East=0, West=5, BoundaryWidth=10
+    )
+    domain = Domain(topodata=topo, x1=0.0, x2=40.0, y1=0.0, y2=8.0, Nx=160, Ny=32)
+    solver = Solver(
+        domain=domain, boundary_conditions=bc, model="SWE", wetdry_scheme="conserving"
+    )
+    run = Evolve(solver=solver, maxsteps=1)
+    solver.inflows.append(DischargeBoundary(solver, "west", [0.0, 60.0], [0.0, 0.0]))
+    run.Evolve_0()
+    bank = _bed(solver) > 0.0
+    v0 = _wet_volume(solver)
+    for i in range(round(20.0 / float(solver.dt))):
+        run.Evolve_Steps(i)
+    depth_now = _eta(solver) - _bed(solver)
+    assert np.isfinite(solver.State.to_numpy()).all()
+    assert depth_now[INNER][bank[INNER]].max() < float(solver.delta)
+    assert _wet_volume(solver) == pytest.approx(v0, rel=1e-4)
+
+
 def test_two_sources_add_up_and_overlap_is_refused(tmp_path: Path) -> None:
     from celeris.hydrograph import inlet_mask
 
