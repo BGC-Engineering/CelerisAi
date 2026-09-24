@@ -117,6 +117,10 @@ class SpillwaySink:
         outlet_mask: Optional ``(nx, ny)`` patch that receives the discharge.
             Without it the water leaves the model. Reverse flow (negative
             ``Q``) is allowed only with an outlet.
+        head_mask: Optional ``(nx, ny)`` patch whose mean surface is the
+            rating's ``h_up`` instead of the intake's own. Use it when the
+            intake footprint is small enough to sit in its own drawdown
+            (ANUGA's enquiry point). Read only; it may overlap anything.
         tailwater_m: Downstream level passed to the rating when there is no
             outlet (default: far below any sill, i.e. free flow).
         min_depth_m: Depth the patches must keep (m). The discharge is
@@ -131,6 +135,7 @@ class SpillwaySink:
         mask: "np.ndarray",
         rating: Rating,
         outlet_mask: "np.ndarray | None" = None,
+        head_mask: "np.ndarray | None" = None,
         tailwater_m: float = -1.0e9,
         min_depth_m: float = 0.0,
         smoothing_s: float = 0.0,
@@ -168,14 +173,23 @@ class SpillwaySink:
         self.tailwater_m = float(tailwater_m)
         self.min_depth_m = max(float(solver.delta), float(min_depth_m))
         self.smoothing_s = float(smoothing_s)
-        # patch field: 1 = intake, 2 = outlet
+        self.head_np = (
+            None if head_mask is None else _patch(solver, head_mask, "head mask")
+        )
+        # patch field: 1 = intake, 2 = outlet; head cells are a separate field
         patch_np = self.mask_np.astype(np.int32)
         if self.outlet_np is not None:
             patch_np[self.outlet_np] = 2
         self.patch = ti.field(ti.i32, shape=patch_np.shape)
         self.patch.from_numpy(patch_np)
-        # per-patch reductions: [sum eta, min depth] for intake (0:2) and outlet (2:4)
-        self.stats = ti.field(ti.f32, shape=4)
+        self.head = ti.field(ti.i32, shape=patch_np.shape)
+        self.head.from_numpy(
+            (self.head_np if self.head_np is not None else self.mask_np).astype(
+                np.int32
+            )
+        )
+        # reductions: [sum eta, min depth] for intake (0:2), outlet (2:4); head sum (4)
+        self.stats = ti.field(ti.f32, shape=5)
         self.q_now = 0.0
         self.volume_out_m3 = 0.0
         self._checked = False
@@ -190,6 +204,8 @@ class SpillwaySink:
                 depth = eta - self.solver.Bottom[2, i, j]
                 ti.atomic_add(self.stats[2 * (p - 1)], eta)
                 ti.atomic_min(self.stats[2 * (p - 1) + 1], depth)
+            if self.head[i, j] == 1:
+                ti.atomic_add(self.stats[4], self.solver.State[i, j][0])
 
     @ti.kernel
     def _apply(self, rate_in: ti.f32, rate_out: ti.f32):
@@ -200,11 +216,13 @@ class SpillwaySink:
                 self.solver.LandslideDhdt[i, j].x = rate_out
 
     def levels(self) -> tuple[float, float, float, float]:
-        """Mean surface and minimum depth over the intake and the outlet."""
-        self.stats.from_numpy(np.array([0.0, 1e30, 0.0, 1e30], dtype=np.float32))
+        """Head level (head patch, else intake mean), intake minimum depth, and
+        the same for the outlet."""
+        self.stats.from_numpy(np.array([0.0, 1e30, 0.0, 1e30, 0.0], dtype=np.float32))
         self._probe()
         s = self.stats.to_numpy().astype(np.float64)
-        h_up = s[0] / self.mask_np.sum()
+        n_head = (self.head_np if self.head_np is not None else self.mask_np).sum()
+        h_up = s[4] / n_head
         if self.outlet_np is None:
             return h_up, s[1], self.tailwater_m, np.inf
         return h_up, s[1], s[2] / self.outlet_np.sum(), s[3]

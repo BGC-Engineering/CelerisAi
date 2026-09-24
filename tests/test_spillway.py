@@ -176,3 +176,20 @@ def test_steady_inflow_settles_at_the_rating_head(tmp_path: Path) -> None:
     assert sink.q_now == pytest.approx(q_in, rel=0.03)
     pool = float(_eta(solver)[20:120, 3:-3].mean())
     assert pool - sill == pytest.approx(head_exact, rel=0.05)
+
+
+def test_head_mask_reads_the_far_field(tmp_path: Path) -> None:
+    """With a head patch the rating sees that patch's level, not the intake's."""
+    solver, run = _build_basin(tmp_path, lambda x: np.full_like(x, 1.0))
+    intake = _strip_mask(solver, 10, 12)
+    head = _strip_mask(solver, 100, 140)
+    sink = SpillwaySink(solver, intake, poleni(-0.4, 4.0, 0.4), head_mask=head)
+    solver.inflows.append(sink)
+    run.Evolve_0()
+    dt = float(solver.dt)
+    for n in range(round(20.0 / dt)):
+        run.Evolve_Steps(n)
+    eta = _eta(solver)
+    h_up = sink.levels()[0]
+    assert h_up == pytest.approx(float(eta[head].mean()), abs=1e-4)
+    assert np.isfinite(eta).all()
