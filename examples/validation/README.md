@@ -11,6 +11,7 @@ uv run python examples/validation/cli.py run dambreak               # Stoker + R
 uv run python examples/validation/cli.py run bump                   # exact flow over a crest, both inflows
 uv run python examples/validation/cli.py run breach --inflow boundary
 uv run python examples/validation/cli.py run malpasset
+uv run python examples/validation/cli.py run spillway               # TELEMAC weirs2 twin, GPU
 uv run python examples/validation/cli.py run all                    # everything + regression checks
 
 # regression baselines (Tracy Arm, 4 coastal examples, breach, Malpasset)
@@ -52,6 +53,7 @@ deterministic solver.
 | `bump/` | steady flow over a bump, discharge boundary and interior source | exact, TELEMAC HLLC twins |
 | `breach/` | TELEMAC breach channel, dyke intact: hydrograph routing and overtopping | TELEMAC-2D |
 | `malpasset/` | 1959 dam break | lab gauges, transformer times, TELEMAC HLLC |
+| `spillway/` | TELEMAC weirs2: five weirs between six ponds as `SpillwaySink`s (level-dependent outlet) | TELEMAC-2D generic weirs |
 | `regression/` | 8-case freeze/check/compare/plot harness | frozen baselines |
 
 Each folder's README carries the setup, the numbers and what was learned.

@@ -969,6 +969,10 @@ class Solver:
                     eta_m = srcState[self.BCShift - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.BCShift - i, j], 0.0)
                     hu_in = 0.0
+                    if self.wd_conserving == 1 and h_m <= self.delta:
+                        # Dry mirror cell -> dry ghost cell, as at a solid wall:
+                        # its elevation on a lower ghost bed is a phantom column.
+                        eta_m = self.Bottom[2, i, j]
                     if h_m > self.delta and self.InflowArea[0] > 0.0:
                         hu_in = h_m * self.InflowQ[0] / self.InflowArea[0]
                         if j == 2 or j == self.ny - 3:
@@ -979,6 +983,10 @@ class Solver:
                     eta_m = srcState[self.R_x - i, j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, self.R_x - i, j], 0.0)
                     hu_in = 0.0
+                    if self.wd_conserving == 1 and h_m <= self.delta:
+                        # Dry mirror cell -> dry ghost cell, as at a solid wall:
+                        # its elevation on a lower ghost bed is a phantom column.
+                        eta_m = self.Bottom[2, i, j]
                     if h_m > self.delta and self.InflowArea[1] > 0.0:
                         hu_in = -h_m * self.InflowQ[1] / self.InflowArea[1]
                         if j == 2 or j == self.ny - 3:
@@ -989,6 +997,10 @@ class Solver:
                     eta_m = srcState[i, self.BCShift - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.BCShift - j], 0.0)
                     hv_in = 0.0
+                    if self.wd_conserving == 1 and h_m <= self.delta:
+                        # Dry mirror cell -> dry ghost cell, as at a solid wall:
+                        # its elevation on a lower ghost bed is a phantom column.
+                        eta_m = self.Bottom[2, i, j]
                     if h_m > self.delta and self.InflowArea[2] > 0.0:
                         hv_in = h_m * self.InflowQ[2] / self.InflowArea[2]
                         if i == 2 or i == self.nx - 3:
@@ -999,6 +1011,10 @@ class Solver:
                     eta_m = srcState[i, self.R_y - j][0]
                     h_m = ti.max(eta_m - self.Bottom[2, i, self.R_y - j], 0.0)
                     hv_in = 0.0
+                    if self.wd_conserving == 1 and h_m <= self.delta:
+                        # Dry mirror cell -> dry ghost cell, as at a solid wall:
+                        # its elevation on a lower ghost bed is a phantom column.
+                        eta_m = self.Bottom[2, i, j]
                     if h_m > self.delta and self.InflowArea[3] > 0.0:
                         hv_in = -h_m * self.InflowQ[3] / self.InflowArea[3]
                         if i == 2 or i == self.nx - 3:

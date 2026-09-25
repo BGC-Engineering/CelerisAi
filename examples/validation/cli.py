@@ -94,6 +94,21 @@ def breach(inflow, wetdry) -> None:
 @click.option(
     "--wetdry", type=click.Choice(["legacy", "conserving"]), default="conserving"
 )
+@click.option("--arch", type=click.Choice(["cuda", "cpu"]), default="cuda")
+def spillway(wetdry, arch) -> None:
+    """TELEMAC weirs2: five weirs between six ponds, one SpillwaySink each."""
+    s = HERE / "spillway/spillway_validation.py"
+    out = data_root() / "celeris" / f"spillway_{wetdry}"
+    if not (data_root() / "telemac/weirs2/telemac_weirs2.npz").exists():
+        _run([s, "telemac"])
+    _run([s, "run", "--out", out, "--wetdry", wetdry, "--arch", arch])
+    _run([s, "compare", "--out", out])
+
+
+@run.command()
+@click.option(
+    "--wetdry", type=click.Choice(["legacy", "conserving"]), default="conserving"
+)
 @click.option("--seed-wetting", type=float, default=0.0)
 def malpasset(wetdry, seed_wetting) -> None:
     """Malpasset 1959 dam break against lab gauges and TELEMAC."""
@@ -128,6 +143,7 @@ def run_all(ctx) -> None:
     ctx.invoke(dambreak)
     ctx.invoke(bump)
     ctx.invoke(breach)
+    ctx.invoke(spillway)
     ctx.invoke(malpasset)
     ctx.invoke(regress_check, tag="conserving_v2", wetdry="conserving", tol=1e-6)
     ctx.invoke(regress_check, tag="legacy_v2", wetdry="legacy", tol=1e-6)
@@ -232,6 +248,15 @@ EXAMPLES_NEEDED = {  # TELEMAC example folder: files the cases read
         "user_fortran/user_condin_h.f",
         "user_fortran/user_utimp_telemac2d.f",
         "doc/malpasset.tex",
+    ],
+    "weirs": [
+        "t2d_weirs2.cas",
+        "t2d_weirs2.liq",
+        "init_weirs2.slf",
+        "weirs2.txt",
+        "geo_weirs2.slf",
+        "geo_weirs2.cli",
+        "doc/weirs.tex",
     ],
     "dambreak": [
         "geo_ritter.slf",
